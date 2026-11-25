@@ -26,6 +26,7 @@ async function extractPdf(filePath) {
       id: sectionId,
       title: `Page ${pageNumber}`,
       level: 2,
+      page: pageNumber,
       paragraphs: text ? [{ id: `page-${pageNumber}-paragraph`, text }] : [{
         id: `page-${pageNumber}-paragraph`,
         text: '[No extractable text found on this page.]',
@@ -58,34 +59,79 @@ async function extractPdf(filePath) {
 async function extractDocx(filePath) {
   const result = await mammoth.convertToHtml({ path: filePath });
   const html = result.value;
-  const text = html
-    .replace(/<h([1-3])[^>]*>(.*?)<\/h\1>/gi, '\n<h>$2</h>\n')
+  const cleanText = (value) => value
     .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\n{3,}/g, '\n\n')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
     .trim();
-  const sections = text
-    .split(/\n{2,}/)
-    .filter(Boolean)
-    .map((part, index) => ({
-      id: `section-${index + 1}`,
-      title: index === 0 ? 'Document' : undefined,
-      level: index === 0 ? 1 : undefined,
-      paragraphs: [{ id: `paragraph-${index + 1}`, text: part.replace(/<h>|<\/h>/g, '') }],
-    }));
-  const markdown = text.replace(/<h>(.*?)<\/h>/g, '## $1');
+  const sections = [];
   const outline = [];
-  const headingMatches = [...markdown.matchAll(/^#{1,3}\s+(.+)$/gm)];
-  headingMatches.forEach((match, index) => {
-    outline.push({
-      id: `outline-${index + 1}`,
-      level: Math.min(3, (match[0].match(/^#+/)?.[0].length || 1)),
-      title: match[1],
-      sectionId: sections[index]?.id || sections[0]?.id,
-    });
-  });
+  let currentSection = null;
+  let paragraphIndex = 0;
+
+  const ensureDocumentSection = () => {
+    if (!currentSection) {
+      currentSection = { id: 'section-1', title: 'Document', level: 1, paragraphs: [] };
+      sections.push(currentSection);
+    }
+  };
+
+  const blocks = html.match(/<(h[1-3]|p|blockquote|ul|ol|table|pre)\b[^>]*>[\s\S]*?<\/\1>/gi) || [];
+  for (const block of blocks) {
+    const headingMatch = block.match(/^<h([1-3])[^>]*>([\s\S]*?)<\/h\1>/i);
+    if (headingMatch) {
+      const title = cleanText(headingMatch[2]);
+      if (!title) continue;
+      const level = Number(headingMatch[1]);
+      const sectionId = `section-${sections.length + 1}`;
+      currentSection = { id: sectionId, title, level, paragraphs: [] };
+      sections.push(currentSection);
+      outline.push({ id: `outline-${outline.length + 1}`, level, title, sectionId });
+      continue;
+    }
+
+    ensureDocumentSection();
+    paragraphIndex += 1;
+
+    if (/^<blockquote/i.test(block)) {
+      currentSection.paragraphs.push({ id: `paragraph-${paragraphIndex}`, kind: 'blockquote', text: cleanText(block) });
+    } else if (/^<(ul|ol)/i.test(block)) {
+      const kind = /^<ol/i.test(block) ? 'numbered-list' : 'bulleted-list';
+      const items = [...block.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/gi)].map((match) => cleanText(match[1])).filter(Boolean);
+      if (items.length > 0) {
+        currentSection.paragraphs.push({ id: `paragraph-${paragraphIndex}`, kind, text: '', items });
+      }
+    } else if (/^<table/i.test(block)) {
+      const rows = [...block.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((row) =>
+        [...row[1].matchAll(/<(th|td)[^>]*>([\s\S]*?)<\/\1>/gi)].map((cell) => cleanText(cell[2])));
+      const hasHeaders = /<th/i.test(block);
+      currentSection.paragraphs.push({
+        id: `paragraph-${paragraphIndex}`,
+        kind: 'table',
+        text: '',
+        headers: hasHeaders ? rows[0] : undefined,
+        rows: hasHeaders ? rows.slice(1) : rows,
+      });
+    } else if (/^<pre/i.test(block)) {
+      currentSection.paragraphs.push({ id: `paragraph-${paragraphIndex}`, kind: 'code', text: cleanText(block) });
+    } else {
+      const text = cleanText(block);
+      if (text) currentSection.paragraphs.push({ id: `paragraph-${paragraphIndex}`, text });
+    }
+  }
+
+  if (sections.length === 0) {
+    sections.push({ id: 'section-1', title: 'Document', level: 1, paragraphs: [] });
+  }
+  const markdown = sections.map((section) => {
+    const heading = `${'#'.repeat(section.level || 1)} ${section.title || ''}`;
+    const body = section.paragraphs.map((paragraph) => paragraph.items?.join('\n') || paragraph.text).filter(Boolean).join('\n\n');
+    return `${heading}\n\n${body}`;
+  }).join('\n\n');
 
   return {
     type: 'docx',

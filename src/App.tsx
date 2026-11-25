@@ -1,9 +1,17 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import './index.css';
-import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState, OutlineItem, Section } from './types';
+import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState, OutlineItem, Section, Paragraph } from './types';
 import { sampleDocument, sampleConcepts, sampleResearch } from './utils/sampleData';
-import { chatWithGemini, explainWithGemini, researchWithGemini } from './utils/gemini';
-import type { GeminiChatMessage } from './utils/gemini';
+import {
+  createChatConversation,
+  explainWithGemini,
+  getChatMessages,
+  listChatConversations,
+  researchWithGemini,
+  stopChatGeneration,
+  streamPersistentChat,
+} from './utils/gemini';
+import type { ChatConversation, PersistedChatMessage } from './utils/gemini';
 
 interface SavedPassageNote {
   id: string;
@@ -489,58 +497,229 @@ function ResearchPanel({ notes, onAddFinding }: { notes: ResearchNote[]; onAddFi
 }
 
 function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: string }) {
-  const [messages, setMessages] = useState<GeminiChatMessage[]>([]);
+  const [conversations, setConversations] = useState<ChatConversation[]>([]);
+  const [conversationId, setConversationId] = useState('');
+  const [messages, setMessages] = useState<PersistedChatMessage[]>([]);
   const [question, setQuestion] = useState('');
   const [sending, setSending] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const requestControllerRef = useRef<AbortController | null>(null);
+  const conversationIdRef = useRef('');
 
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, sending]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingHistory(true);
+    setError('');
+
+    async function restoreConversation() {
+      try {
+        const available = await listChatConversations(doc.id);
+        const preferenceKey = `clarity-active-conversation:${doc.id}`;
+        const preferredId = window.localStorage.getItem(preferenceKey);
+        let selected = available.find((item) => item.id === preferredId) ?? available[0];
+        if (!selected) selected = await createChatConversation(doc.id);
+        if (cancelled) return;
+        const nextConversations = available.some((item) => item.id === selected.id)
+          ? available
+          : [selected, ...available];
+        setConversations(nextConversations);
+        setConversationId(selected.id);
+        conversationIdRef.current = selected.id;
+        window.localStorage.setItem(preferenceKey, selected.id);
+        const restoredMessages = await getChatMessages(selected.id);
+        if (!cancelled) setMessages(restoredMessages);
+      } catch (restoreError) {
+        if (!cancelled) {
+          setError(restoreError instanceof Error ? restoreError.message : 'Could not restore chat history.');
+        }
+      } finally {
+        if (!cancelled) setLoadingHistory(false);
+      }
+    }
+
+    void restoreConversation();
+    return () => {
+      cancelled = true;
+      requestControllerRef.current?.abort();
+    };
+  }, [doc.id]);
+
+  async function selectConversation(nextId: string) {
+    if (!nextId || nextId === conversationIdRef.current) return;
+    requestControllerRef.current?.abort();
+    setSending(false);
+    setError('');
+    setConversationId(nextId);
+    conversationIdRef.current = nextId;
+    window.localStorage.setItem(`clarity-active-conversation:${doc.id}`, nextId);
+    try {
+      setMessages(await getChatMessages(nextId));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load this conversation.');
+    }
+  }
+
+  async function startNewConversation() {
+    requestControllerRef.current?.abort();
+    setSending(false);
+    setError('');
+    try {
+      const created = await createChatConversation(doc.id);
+      setConversations((previous) => [created, ...previous]);
+      setConversationId(created.id);
+      conversationIdRef.current = created.id;
+      window.localStorage.setItem(`clarity-active-conversation:${doc.id}`, created.id);
+      setMessages([]);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : 'Could not start a new conversation.');
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const userQuestion = question.trim();
-    if (!userQuestion || sending) return;
+    const activeConversationId = conversationIdRef.current;
+    if (!userQuestion || sending || !activeConversationId) return;
 
-    const nextMessages = [...messages, { role: 'user' as const, content: userQuestion }];
-    setMessages(nextMessages);
+    const timestamp = new Date().toISOString();
+    setMessages((previous) => [
+      ...previous,
+      {
+        id: `temporary-user-${Date.now()}`,
+        role: 'user',
+        content: userQuestion,
+        status: 'complete',
+        errorMessage: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+      {
+        id: `temporary-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        status: 'streaming',
+        errorMessage: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    ]);
     setQuestion('');
     setError('');
     setSending(true);
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
 
     try {
-      const answer = await chatWithGemini(
+      await streamPersistentChat(
+        activeConversationId,
         doc.name,
         getDocumentChatContext(doc, activeSectionId),
-        nextMessages.slice(-8),
+        userQuestion,
+        (messageId) => {
+          if (conversationIdRef.current !== activeConversationId) return;
+          setMessages((previous) => previous.map((message) =>
+            message.id.startsWith('temporary-assistant-')
+              ? { ...message, id: messageId }
+              : message,
+          ));
+        },
+        (chunk) => {
+          if (conversationIdRef.current !== activeConversationId) return;
+          setMessages((previous) => {
+            const lastMessage = previous[previous.length - 1];
+            if (lastMessage?.role !== 'assistant') return previous;
+            return [
+              ...previous.slice(0, -1),
+              { ...lastMessage, content: lastMessage.content + chunk, status: 'streaming' },
+            ];
+          });
+        },
+        controller.signal,
       );
-      setMessages([...nextMessages, { role: 'assistant', content: answer }]);
+      if (conversationIdRef.current === activeConversationId) {
+        setMessages(await getChatMessages(activeConversationId));
+        setConversations(await listChatConversations(doc.id));
+      }
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Chat request failed.');
+      if (
+        conversationIdRef.current === activeConversationId
+        && !(requestError instanceof DOMException && requestError.name === 'AbortError')
+      ) {
+        setError(requestError instanceof Error ? requestError.message : 'Chat request failed.');
+        try {
+          setMessages(await getChatMessages(activeConversationId));
+        } catch (loadError) {
+          setError(loadError instanceof Error
+            ? `${requestError instanceof Error ? requestError.message : 'Chat request failed.'} ${loadError.message}`
+            : 'Chat request failed and saved messages could not be reloaded.');
+        }
+      }
     } finally {
-      setSending(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        setSending(false);
+      }
+    }
+  }
+
+  async function handleStop() {
+    const activeConversationId = conversationIdRef.current;
+    if (!activeConversationId) return;
+    try {
+      await stopChatGeneration(activeConversationId);
+    } catch (stopError) {
+      setError(stopError instanceof Error ? stopError.message : 'Could not stop the response.');
     }
   }
 
   return (
     <section className="chat-panel" aria-label="Chat about this document">
       <div className="chat-context-note">
+        <div className="chat-context-note__conversation">
+          <strong>Conversation</strong>
+          <select
+            value={conversationId}
+            onChange={(event) => void selectConversation(event.target.value)}
+            aria-label="Choose a conversation"
+            disabled={loadingHistory || sending}
+          >
+            {conversations.map((conversation) => (
+              <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
+            ))}
+          </select>
+          <button type="button" className="chat-new-button" onClick={() => void startNewConversation()} disabled={loadingHistory}>
+            New
+          </button>
+        </div>
         Ask anything about <strong>{doc.name}</strong>. No text selection needed.
         <span>Context uses the current section and nearby document text.</span>
       </div>
       <div className="chat-messages" aria-live="polite">
-        {messages.length === 0 && (
+        {loadingHistory && <p className="chat-thinking" role="status">Restoring conversation…</p>}
+        {!loadingHistory && messages.length === 0 && (
           <p className="chat-empty">Ask a question to start a conversation about this document.</p>
         )}
-        {messages.map((message, index) => (
-          <article key={`${index}-${message.role}`} className={`chat-message chat-message--${message.role}`}>
+        {messages.map((message) => (
+          <article key={message.id} className={`chat-message chat-message--${message.role}`}>
             <span className="chat-message__author">{message.role === 'user' ? 'You' : 'Clarity'}</span>
             <p>{message.content}</p>
+            {message.status !== 'complete' && (
+              <span className={`chat-message__status chat-message__status--${message.status}`}>
+                {message.status === 'streaming' || message.status === 'pending'
+                  ? 'Generating…'
+                  : message.status === 'failed'
+                    ? message.errorMessage || 'Response failed. You can ask again.'
+                    : `Response ${message.status}. You can ask again.`}
+              </span>
+            )}
           </article>
         ))}
-        {sending && <p className="chat-thinking" role="status">Thinking…</p>}
         <div ref={endOfMessagesRef} />
       </div>
       {error && <p className="chat-error" role="alert">{error}</p>}
@@ -552,13 +731,17 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
           aria-label="Your question"
           maxLength={2000}
           rows={3}
-          disabled={sending}
+          disabled={sending || loadingHistory || !conversationId}
         />
         <div className="chat-composer__footer">
           <span>Answers are grounded in the extracted document text.</span>
-          <button className="btn btn--primary btn--sm" type="submit" disabled={sending || !question.trim()}>
-            {sending ? 'Sending…' : 'Send'}
-          </button>
+          {sending ? (
+            <button className="btn btn--secondary btn--sm" type="button" onClick={() => void handleStop()}>Stop</button>
+          ) : (
+            <button className="btn btn--primary btn--sm" type="submit" disabled={loadingHistory || !conversationId || !question.trim()}>
+              Send
+            </button>
+          )}
         </div>
       </form>
     </section>
@@ -1436,6 +1619,35 @@ function renderHighlightedText(text: string, quotes: string[]): React.ReactNode 
   return parts;
 }
 
+interface ReadingPreferences {
+  fontFamily: 'serif' | 'sans';
+  fontSize: 'small' | 'medium' | 'large' | 'xlarge';
+  lineHeight: 'compact' | 'comfortable' | 'relaxed';
+  contentWidth: 'narrow' | 'standard' | 'wide';
+  theme: 'light' | 'dark' | 'sepia';
+}
+
+const defaultReadingPreferences: ReadingPreferences = {
+  fontFamily: 'serif',
+  fontSize: 'medium',
+  lineHeight: 'comfortable',
+  contentWidth: 'standard',
+  theme: 'dark',
+};
+
+function paraPageNumber(section: Section): number | undefined {
+  return section.paragraphs.find((paragraph) => paragraph.page)?.page;
+}
+
+function loadReadingPreferences(): ReadingPreferences {
+  try {
+    const stored = window.localStorage.getItem('clarity-reading-preferences');
+    return stored ? { ...defaultReadingPreferences, ...JSON.parse(stored) } : defaultReadingPreferences;
+  } catch {
+    return defaultReadingPreferences;
+  }
+}
+
 // =========================================
 // READER PANE
 // =========================================
@@ -1463,11 +1675,62 @@ function ReaderPane({
   savedQuotes: string[];
 }) {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
-  const [zoom, setZoom] = useState(1);
+  const [preferences, setPreferences] = useState<ReadingPreferences>(loadReadingPreferences);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
 
   const currentSectionIndex = doc.content.findIndex((section) => section.id === currentSectionId);
+
+  useEffect(() => {
+    window.localStorage.setItem('clarity-reading-preferences', JSON.stringify(preferences));
+  }, [preferences]);
+
+  function updatePreference<K extends keyof ReadingPreferences>(key: K, value: ReadingPreferences[K]) {
+    setPreferences((previous) => ({ ...previous, [key]: value }));
+  }
+
+  function renderDocumentBlock(para: Paragraph, quotes: string[]) {
+    if (para.kind === 'blockquote') {
+      return <blockquote className="reader-blockquote">{renderHighlightedText(para.text, quotes)}</blockquote>;
+    }
+    if (para.kind === 'bulleted-list' || para.kind === 'numbered-list') {
+      const ListTag = para.kind === 'numbered-list' ? 'ol' : 'ul';
+      return (
+        <ListTag className="reader-list">
+          {(para.items ?? [para.text]).map((item, index) => (
+            <li key={`${para.id}-${index}`}>{renderHighlightedText(item, quotes)}</li>
+          ))}
+        </ListTag>
+      );
+    }
+    if (para.kind === 'table') {
+      return (
+        <div className="reader-table-wrap" role="region" aria-label="Document table" tabIndex={0}>
+          <table className="reader-table">
+            {para.headers && (
+              <thead>
+                <tr>{para.headers.map((header, index) => <th key={index}>{header}</th>)}</tr>
+              </thead>
+            )}
+            <tbody>
+              {(para.rows ?? []).map((row, rowIndex) => (
+                <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+    if (para.kind === 'code') {
+      return <pre className="reader-code"><code>{para.text}</code></pre>;
+    }
+    return (
+      <p className={para.isHighlight ? 'highlight' : ''}>
+        {renderHighlightedText(para.text, quotes)}
+      </p>
+    );
+  }
 
   function navigateSection(index: number) {
     const section = doc.content[index];
@@ -1517,7 +1780,7 @@ function ReaderPane({
   }
 
   return (
-    <div className="reader-pane">
+    <div className={`reader-pane reader-theme--${preferences.theme}`}>
       {/* Toolbar */}
       <div className="reader-toolbar">
         <div className="reader-toolbar__group">
@@ -1564,17 +1827,78 @@ function ReaderPane({
         </div>
         <div className="reader-toolbar__sep" />
         <div className="reader-zoom" aria-label="Reading text size">
-          <button className="icon-btn" onClick={() => setZoom((value) => Math.max(0.8, value - 0.1))} aria-label="Decrease text size">
-            A−
-          </button>
-          <span>{Math.round(zoom * 100)}%</span>
-          <button className="icon-btn" onClick={() => setZoom((value) => Math.min(1.4, value + 0.1))} aria-label="Increase text size">
-            A+
+          <button
+            className={`icon-btn ${settingsOpen ? 'active' : ''}`}
+            onClick={() => setSettingsOpen((value) => !value)}
+            aria-expanded={settingsOpen}
+            aria-label="Reading preferences"
+          >
+            Aa
           </button>
         </div>
+        <a
+          className="reader-original-link"
+          href={`/api/v1/documents/${doc.id}/original`}
+          target="_blank"
+          rel="noreferrer"
+          title="Open original document"
+        >
+          <Icon.ExternalLink />
+          Original
+        </a>
         <div className="reader-toolbar__hint">
           Select text to explain, research, or save
         </div>
+        {settingsOpen && (
+          <div className="reading-settings" role="dialog" aria-label="Reading preferences">
+            <div className="reading-settings__title">
+              <strong>Reading settings</strong>
+              <button className="icon-btn" onClick={() => setSettingsOpen(false)} aria-label="Close reading settings">
+                <Icon.X />
+              </button>
+            </div>
+            <label>
+              <span>Typeface</span>
+              <select value={preferences.fontFamily} onChange={(event) => updatePreference('fontFamily', event.target.value as ReadingPreferences['fontFamily'])}>
+                <option value="serif">Serif</option>
+                <option value="sans">Sans-serif</option>
+              </select>
+            </label>
+            <label>
+              <span>Text size</span>
+              <select value={preferences.fontSize} onChange={(event) => updatePreference('fontSize', event.target.value as ReadingPreferences['fontSize'])}>
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+                <option value="large">Large</option>
+                <option value="xlarge">Extra large</option>
+              </select>
+            </label>
+            <label>
+              <span>Line spacing</span>
+              <select value={preferences.lineHeight} onChange={(event) => updatePreference('lineHeight', event.target.value as ReadingPreferences['lineHeight'])}>
+                <option value="compact">Compact</option>
+                <option value="comfortable">Comfortable</option>
+                <option value="relaxed">Relaxed</option>
+              </select>
+            </label>
+            <label>
+              <span>Content width</span>
+              <select value={preferences.contentWidth} onChange={(event) => updatePreference('contentWidth', event.target.value as ReadingPreferences['contentWidth'])}>
+                <option value="narrow">Narrow</option>
+                <option value="standard">Standard</option>
+                <option value="wide">Wide</option>
+              </select>
+            </label>
+            <label>
+              <span>Theme</span>
+              <select value={preferences.theme} onChange={(event) => updatePreference('theme', event.target.value as ReadingPreferences['theme'])}>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+                <option value="sepia">Sepia</option>
+              </select>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Body */}
@@ -1585,14 +1909,29 @@ function ReaderPane({
         onScroll={updateActiveSection}
         onClick={() => !window.getSelection()?.toString() && setTooltip(null)}
       >
-        <div className="reader-content">
+        <div
+          className={[
+            'reader-content',
+            `reader-font--${preferences.fontFamily}`,
+            `reader-size--${preferences.fontSize}`,
+            `reader-leading--${preferences.lineHeight}`,
+            `reader-width--${preferences.contentWidth}`,
+          ].join(' ')}
+        >
           {doc.content.map((section) => (
             <section id={`reader-${section.id}`} key={section.id} className="reader-section">
-              {section.title && <h2 style={{ fontSize: `${20 * zoom}px` }}>{section.title}</h2>}
+              {section.title && (
+                <div className="reader-section-heading">
+                  {section.level === 1 ? <h1>{section.title}</h1> : section.level === 3 ? <h3>{section.title}</h3> : <h2>{section.title}</h2>}
+                  {(section.page ?? paraPageNumber(section)) && (
+                    <span className="reader-page-ref">Page {section.page ?? paraPageNumber(section)}</span>
+                  )}
+                </div>
+              )}
               {section.paragraphs.map((para) => (
-                <p key={para.id} className={para.isHighlight ? 'highlight' : ''} style={{ fontSize: `${16 * zoom}px` }}>
-                  {renderHighlightedText(para.text, savedQuotes)}
-                </p>
+                <div key={para.id} className="reader-block">
+                  {renderDocumentBlock(para, savedQuotes)}
+                </div>
               ))}
             </section>
           ))}
@@ -1809,7 +2148,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
   const activeConcepts = concepts.filter((concept) => concept.documentId === activeDoc.id);
   const activeResearch = research.filter((note) => note.documentId === activeDoc.id);
   const activeSavedNotes = savedNotes.filter((note) => note.documentId === activeDoc.id);
-  const [panelTab, setPanelTab] = useState<ExtendedPanelTab>('concepts');
+  const [panelTab, setPanelTab] = useState<ExtendedPanelTab>('chat');
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
   const [panelOpen, setPanelOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
   const [focusMode, setFocusMode] = useState(false);

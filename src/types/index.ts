@@ -27,6 +27,7 @@ export interface Section {
   id: string;
   title?: string;
   level?: 1 | 2 | 3;
+  page?: number;
   paragraphs: Paragraph[];
 }
 
@@ -34,6 +35,11 @@ export interface Paragraph {
   id: string;
   text: string;
   isHighlight?: boolean;
+  kind?: 'paragraph' | 'blockquote' | 'bulleted-list' | 'numbered-list' | 'table' | 'code';
+  items?: string[];
+  headers?: string[];
+  rows?: string[][];
+  page?: number;
 }
 
 export interface Concept {
