@@ -3,7 +3,12 @@ interface GeminiResponse {
   error?: string;
 }
 
-async function requestGemini(path: string, body: Record<string, string>): Promise<string> {
+export interface GeminiChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+async function requestGemini(path: string, body: Record<string, unknown>): Promise<string> {
   const response = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -26,4 +31,12 @@ export function explainWithGemini(quote: string, userQuestion: string): Promise<
 
 export function researchWithGemini(question: string, sourceQuote: string): Promise<string> {
   return requestGemini('/api/ai/research', { question, sourceQuote });
+}
+
+export function chatWithGemini(
+  documentName: string,
+  documentContext: string,
+  messages: GeminiChatMessage[],
+): Promise<string> {
+  return requestGemini('/api/ai/chat', { documentName, documentContext, messages });
 }

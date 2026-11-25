@@ -1,8 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import './index.css';
-import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState } from './types';
+import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState, OutlineItem, Section } from './types';
 import { sampleDocument, sampleConcepts, sampleResearch } from './utils/sampleData';
-import { explainWithGemini, researchWithGemini } from './utils/gemini';
+import { chatWithGemini, explainWithGemini, researchWithGemini } from './utils/gemini';
+import type { GeminiChatMessage } from './utils/gemini';
 
 interface SavedPassageNote {
   id: string;
@@ -13,6 +14,25 @@ interface SavedPassageNote {
   createdAt: Date;
 }
 
+interface LibraryDocument {
+  id: string;
+  name: string;
+  type: 'pdf' | 'docx';
+  status: 'processing' | 'ready' | 'failed';
+  total_pages: number | null;
+  created_at: string;
+  error?: string | null;
+}
+
+interface ProcessedDocumentResponse {
+  id: string;
+  name: string;
+  type: 'pdf' | 'docx';
+  totalPages?: number | null;
+  outline: OutlineItem[];
+  content: Section[];
+}
+
 
 // =========================================
 // ICONS (inline SVG to avoid extra deps)
@@ -21,6 +41,11 @@ const Icon = {
   BookOpen: () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
+    </svg>
+  ),
+  Message: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/>
     </svg>
   ),
   Lightbulb: () => (
@@ -221,6 +246,53 @@ async function readApiJson(response: Response) {
   return response.json();
 }
 
+async function fetchProcessedDocument(id: string, uploadedAt: string): Promise<Document> {
+  const response = await fetch(`/api/v1/documents/${id}/content`);
+  const result = await readApiJson(response) as ProcessedDocumentResponse & { error?: string };
+  if (!response.ok) throw new Error(result.error || 'Could not load the saved document.');
+
+  return {
+    id: result.id,
+    name: result.name,
+    type: result.type,
+    uploadedAt: new Date(uploadedAt),
+    progress: 0,
+    totalPages: result.totalPages ?? undefined,
+    currentPage: 1,
+    outline: result.outline,
+    content: result.content,
+  };
+}
+
+function getDocumentChatContext(doc: Document, activeSectionId: string): string {
+  const sections = doc.content;
+  const foundIndex = sections.findIndex((section) => section.id === activeSectionId);
+  const currentIndex = Math.max(0, foundIndex);
+  const priority = sections.length > 0 ? [currentIndex] : [];
+  for (let distance = 1; priority.length < sections.length; distance += 1) {
+    const before = currentIndex - distance;
+    const after = currentIndex + distance;
+    if (before >= 0) priority.push(before);
+    if (after < sections.length) priority.push(after);
+    if (before < 0 && after >= sections.length) break;
+  }
+
+  const contextSections: { index: number; text: string }[] = [];
+  let remaining = 20000;
+  for (const index of priority) {
+    const section = sections[index];
+    const sectionText = `## ${section.title || `Section ${index + 1}`}\n${section.paragraphs.map((paragraph) => paragraph.text).join('\n')}`;
+    if (remaining <= 0) break;
+    contextSections.push({ index, text: sectionText.slice(0, remaining) });
+    remaining -= sectionText.length + 2;
+  }
+
+  return contextSections
+    .sort((left, right) => left.index - right.index)
+    .map((section) => section.text)
+    .join('\n\n');
+}
+
 // =========================================
 // LANDING PAGE
 // =========================================
@@ -413,6 +485,83 @@ function ResearchPanel({ notes, onAddFinding }: { notes: ResearchNote[]; onAddFi
         </div>
       )}
     </div>
+  );
+}
+
+function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: string }) {
+  const [messages, setMessages] = useState<GeminiChatMessage[]>([]);
+  const [question, setQuestion] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState('');
+  const endOfMessagesRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, sending]);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const userQuestion = question.trim();
+    if (!userQuestion || sending) return;
+
+    const nextMessages = [...messages, { role: 'user' as const, content: userQuestion }];
+    setMessages(nextMessages);
+    setQuestion('');
+    setError('');
+    setSending(true);
+
+    try {
+      const answer = await chatWithGemini(
+        doc.name,
+        getDocumentChatContext(doc, activeSectionId),
+        nextMessages.slice(-8),
+      );
+      setMessages([...nextMessages, { role: 'assistant', content: answer }]);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Chat request failed.');
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <section className="chat-panel" aria-label="Chat about this document">
+      <div className="chat-context-note">
+        Ask anything about <strong>{doc.name}</strong>. No text selection needed.
+        <span>Context uses the current section and nearby document text.</span>
+      </div>
+      <div className="chat-messages" aria-live="polite">
+        {messages.length === 0 && (
+          <p className="chat-empty">Ask a question to start a conversation about this document.</p>
+        )}
+        {messages.map((message, index) => (
+          <article key={`${index}-${message.role}`} className={`chat-message chat-message--${message.role}`}>
+            <span className="chat-message__author">{message.role === 'user' ? 'You' : 'Clarity'}</span>
+            <p>{message.content}</p>
+          </article>
+        ))}
+        {sending && <p className="chat-thinking" role="status">Thinking…</p>}
+        <div ref={endOfMessagesRef} />
+      </div>
+      {error && <p className="chat-error" role="alert">{error}</p>}
+      <form className="chat-composer" onSubmit={handleSubmit}>
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Ask a question about this document…"
+          aria-label="Your question"
+          maxLength={2000}
+          rows={3}
+          disabled={sending}
+        />
+        <div className="chat-composer__footer">
+          <span>Answers are grounded in the extracted document text.</span>
+          <button className="btn btn--primary btn--sm" type="submit" disabled={sending || !question.trim()}>
+            {sending ? 'Sending…' : 'Send'}
+          </button>
+        </div>
+      </form>
+    </section>
   );
 }
 
@@ -626,6 +775,7 @@ type PathNode = {
   description: string;
   status: 'locked' | 'available' | 'in-progress' | 'done';
   reason?: string;
+  sectionId?: string;
 };
 
 const samplePath: PathNode[] = [
@@ -637,8 +787,73 @@ const samplePath: PathNode[] = [
   { id: 'lp6', title: 'Embracing boredom', type: 'core', description: 'Why distraction tolerance must be trained separately from scheduling.', status: 'locked' },
 ];
 
-function LearningPathPanel() {
+function buildDocumentPath(doc: Document, activeSectionId: string): PathNode[] {
+  const outline = doc.outline.filter((item) => !/^(pages?|page\s+\d+)$/i.test(item.title.trim()));
+  const sections = outline.length > 0
+    ? outline.map((item) => ({
+      id: item.id,
+      title: item.title,
+      sectionId: item.sectionId,
+    }))
+    : doc.content.map((section, index) => ({
+      id: section.id,
+      title: section.title || `Section ${index + 1}`,
+      sectionId: section.id,
+    }));
+
+  if (sections.length === 0) {
+    return [{
+      id: doc.id,
+      title: doc.name,
+      type: 'core',
+      description: 'Read this document to build your learning path.',
+      status: 'in-progress',
+    }];
+  }
+
+  const currentIndex = Math.max(0, doc.content.findIndex((section) => section.id === activeSectionId));
+  const currentPathIndex = sections.findIndex((item) => item.sectionId === activeSectionId);
+  const startIndex = currentPathIndex > 6
+    ? Math.min(currentPathIndex - 6, Math.max(0, sections.length - 12))
+    : 0;
+  const visibleSections = sections.slice(startIndex, startIndex + 12);
+  return visibleSections.map((item) => {
+    const sectionId = item.sectionId;
+    const section = doc.content.find((entry) => entry.id === item.sectionId);
+    const excerpt = section?.paragraphs
+      .map((paragraph) => paragraph.text)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const sectionIndex = doc.content.findIndex((entry) => entry.id === item.sectionId);
+
+    return {
+      id: item.id,
+      title: item.title,
+      type: 'core',
+      sectionId,
+      description: excerpt
+        ? `${excerpt.slice(0, 240)}${excerpt.length > 240 ? '…' : ''}`
+        : 'Read this section of the document.',
+      status: item.sectionId === activeSectionId
+        ? 'in-progress'
+        : sectionIndex >= 0 && sectionIndex < currentIndex ? 'done' : 'available',
+    };
+  });
+}
+
+function LearningPathPanel({
+  doc,
+  activeSectionId,
+  onNavigate,
+}: {
+  doc: Document;
+  activeSectionId: string;
+  onNavigate: (sectionId: string) => void;
+}) {
   const [selected, setSelected] = useState<string | null>(null);
+  const isSampleDocument = doc.id === sampleDocument.id;
+  const path = isSampleDocument ? samplePath : buildDocumentPath(doc, activeSectionId);
   const statusIcon: Record<PathNode['status'], string> = {
     done: '✓',
     'in-progress': '◐',
@@ -654,10 +869,10 @@ function LearningPathPanel() {
   return (
     <div className="panel-body">
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: 'var(--space-3)' }}>
-        suggested sequence · Deep Work
+        {isSampleDocument ? 'suggested sequence · Deep Work' : `reading path · ${doc.name}`}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-        {samplePath.map((node) => (
+        {path.map((node) => (
           <div
             key={node.id}
             className={`path-node path-node--${node.status} ${selected === node.id ? 'path-node--selected' : ''}`}
@@ -685,8 +900,17 @@ function LearningPathPanel() {
                   <p className="path-node__reason"><Icon.Lock /> Complete prerequisite concepts to unlock this.</p>
                 )}
                 <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-                  {node.status !== 'locked' && (
-                    <button className="btn btn--secondary btn--sm">Jump to section</button>
+                  {node.status !== 'locked' && node.sectionId && (
+                    <button
+                      className="btn btn--secondary btn--sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        const sectionId = node.sectionId;
+                        if (sectionId) onNavigate(sectionId);
+                      }}
+                    >
+                      Jump to section
+                    </button>
                   )}
                   {node.status !== 'locked' && (
                     <button className="btn btn--ghost btn--sm">Mark optional</button>
@@ -698,7 +922,7 @@ function LearningPathPanel() {
         ))}
       </div>
       <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 'var(--space-3)', padding: 'var(--space-3)', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-        Sequence is suggested, not enforced. Drag to reorder.
+        Based on this document's structure. Sequence is suggested, not enforced.
       </div>
     </div>
   );
@@ -1554,11 +1778,18 @@ function NarrationBar({ text }: { text: string }) {
 // =========================================
 // FULL APP SHELL
 // =========================================
-type ExtendedPanelTab = PanelTab | 'path' | 'notes';
+type ExtendedPanelTab = PanelTab | 'path' | 'notes' | 'chat';
 
 function AppShell({ onBack }: { onBack: () => void }) {
   const [activeDoc, setActiveDoc] = useState<Document>(sampleDocument);
   const [activeSectionId, setActiveSectionId] = useState(sampleDocument.content[0]?.id ?? '');
+  const [libraryDocuments, setLibraryDocuments] = useState<LibraryDocument[]>([]);
+  const [documentCache, setDocumentCache] = useState<Record<string, Document>>({
+    [sampleDocument.id]: sampleDocument,
+  });
+  const [libraryLoading, setLibraryLoading] = useState(true);
+  const [libraryError, setLibraryError] = useState('');
+  const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>(sampleConcepts);
   const [research, setResearch] = useState<ResearchNote[]>(sampleResearch);
   const [savedNotes, setSavedNotes] = useState<SavedPassageNote[]>(() =>
@@ -1596,6 +1827,32 @@ function AppShell({ onBack }: { onBack: () => void }) {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadLibrary() {
+      try {
+        const response = await fetch('/api/v1/documents');
+        const result = await readApiJson(response) as { documents?: LibraryDocument[]; error?: string };
+        if (!response.ok) throw new Error(result.error || 'Could not load the document library.');
+        if (!Array.isArray(result.documents)) throw new Error('The document library response was invalid.');
+        if (!cancelled) {
+          setLibraryDocuments(result.documents);
+          setLibraryError('');
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLibraryError(error instanceof Error ? error.message : 'Could not load the document library.');
+        }
+      } finally {
+        if (!cancelled) setLibraryLoading(false);
+      }
+    }
+
+    void loadLibrary();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
     function handleSearchShortcut(event: KeyboardEvent) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
@@ -1630,6 +1887,39 @@ function AppShell({ onBack }: { onBack: () => void }) {
 
   function handleCapture(text: string) {
     setCaptureText(text);
+  }
+
+  async function handleOpenDocument(item: LibraryDocument) {
+    if (item.status !== 'ready') {
+      setLibraryError(item.status === 'failed'
+        ? item.error || `${item.name} could not be processed.`
+        : `${item.name} is still processing.`);
+      return;
+    }
+
+    setLibraryError('');
+    const cachedDocument = documentCache[item.id];
+    if (cachedDocument) {
+      setActiveDoc(cachedDocument);
+      setActiveSectionId(cachedDocument.content[0]?.id ?? '');
+      setPanelOpen(false);
+      setSidebarOpen(false);
+      return;
+    }
+
+    setLoadingDocumentId(item.id);
+    try {
+      const document = await fetchProcessedDocument(item.id, item.created_at);
+      setDocumentCache((previous) => ({ ...previous, [document.id]: document }));
+      setActiveDoc(document);
+      setActiveSectionId(document.content[0]?.id ?? '');
+      setPanelOpen(false);
+      setSidebarOpen(false);
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : 'Could not open the saved document.');
+    } finally {
+      setLoadingDocumentId(null);
+    }
   }
 
   function handleResearch(text: string) {
@@ -1701,9 +1991,27 @@ function AppShell({ onBack }: { onBack: () => void }) {
   const panelTabs: { id: ExtendedPanelTab; label: string; icon: React.ReactNode }[] = [
     { id: 'outline', label: 'Outline', icon: <Icon.BookOpen /> },
     { id: 'concepts', label: 'Concepts', icon: <Icon.Lightbulb /> },
+    { id: 'chat', label: 'Chat', icon: <Icon.Message /> },
     { id: 'research', label: 'Research', icon: <Icon.Search /> },
     { id: 'notes', label: 'Notes', icon: <Icon.Plus /> },
   ];
+  const sampleLibraryItem: LibraryDocument = {
+    id: sampleDocument.id,
+    name: sampleDocument.name,
+    type: sampleDocument.type === 'docx' ? 'docx' : 'pdf',
+    status: 'ready',
+    total_pages: sampleDocument.totalPages ?? null,
+    created_at: sampleDocument.uploadedAt.toISOString(),
+  };
+  const libraryItems = [
+    ...(!libraryDocuments.some((item) => item.id === sampleDocument.id) && activeDoc.id === sampleDocument.id
+      ? [sampleLibraryItem]
+      : []),
+    ...libraryDocuments,
+  ];
+  const filteredLibraryItems = libraryItems.filter((item) =>
+    item.name.toLowerCase().includes(searchQuery.toLowerCase()),
+  );
 
   return (
     <div className={`app-shell ${focusMode ? 'app-shell--focus' : ''}`}>
@@ -1819,6 +2127,10 @@ function AppShell({ onBack }: { onBack: () => void }) {
               <Icon.Search />
               <span>Research</span>
             </button>
+            <button className={`sidebar-nav-item ${panelTab === 'chat' ? 'active' : ''}`} onClick={() => openPanel('chat')}>
+              <Icon.Message />
+              <span>Chat with document</span>
+            </button>
             <button className="sidebar-nav-item" onClick={() => setSessionModal(true)}>
               <Icon.Timer />
               <span>Deep work</span>
@@ -1829,21 +2141,44 @@ function AppShell({ onBack }: { onBack: () => void }) {
             </button>
           </nav>
           <div className="sidebar-section">
-            <p className="sidebar-section__label">Reading now</p>
+            <p className="sidebar-section__label">Your documents</p>
           </div>
           <div className="sidebar-doc-list">
-            {activeDoc.name.toLowerCase().includes(searchQuery.toLowerCase()) ? (
-              <button className="doc-item active" onClick={() => { setPanelOpen(false); setSidebarOpen(false); }}>
-                <span className="doc-item__icon">PDF</span>
-                <span className="doc-item__name">{activeDoc.name}</span>
-                <span className="doc-item__progress-text">{activeDoc.progress}%</span>
-                <div className="doc-item__progress">
-                  <div className="doc-item__progress-bar" style={{ width: `${activeDoc.progress}%` }} />
-                </div>
-              </button>
+            {filteredLibraryItems.length > 0 ? (
+              filteredLibraryItems.map((item) => {
+                const isActive = item.id === activeDoc.id;
+                const isOpening = item.id === loadingDocumentId;
+                return (
+                  <button
+                    key={item.id}
+                    className={`doc-item ${isActive ? 'active' : ''}`}
+                    onClick={() => { void handleOpenDocument(item); }}
+                    aria-current={isActive ? 'page' : undefined}
+                    title={item.name}
+                  >
+                    <span className="doc-item__icon">{item.type.toUpperCase()}</span>
+                    <span className="doc-item__name">{item.name}</span>
+                    <span className="doc-item__progress-text">
+                      {isOpening ? 'Opening…' : item.status === 'ready'
+                        ? isActive ? `${activeDoc.progress}%` : `${item.total_pages ?? '—'}p`
+                        : item.status}
+                    </span>
+                    {isActive && item.status === 'ready' && (
+                      <div className="doc-item__progress">
+                        <div className="doc-item__progress-bar" style={{ width: `${activeDoc.progress}%` }} />
+                      </div>
+                    )}
+                  </button>
+                );
+              })
+            ) : libraryLoading ? (
+              <p className="sidebar-search-empty">Loading saved documents…</p>
             ) : (
-              <p className="sidebar-search-empty">No documents match “{searchQuery}”.</p>
+              <p className="sidebar-search-empty">
+                {searchQuery ? `No documents match “${searchQuery}”.` : 'No saved documents yet.'}
+              </p>
             )}
+            {libraryError && <p className="sidebar-search-empty" role="alert">{libraryError}</p>}
           </div>
           <div className="sidebar-learning">
             <p className="sidebar-section__label">Study</p>
@@ -1883,6 +2218,20 @@ function AppShell({ onBack }: { onBack: () => void }) {
                       throw new Error(uploadResult.error || 'Document upload failed.');
                     }
 
+                    const uploadedAt = new Date().toISOString();
+                    const libraryItem: LibraryDocument = {
+                      id: uploadResult.id,
+                      name: uploadResult.name,
+                      type: uploadResult.type,
+                      status: 'processing',
+                      total_pages: null,
+                      created_at: uploadedAt,
+                    };
+                    setLibraryDocuments((previous) => [
+                      libraryItem,
+                      ...previous.filter((item) => item.id !== libraryItem.id),
+                    ]);
+                    setLibraryError('');
                     setUploadMessage(`Processing ${file.name}...`);
                     let completed = false;
                     for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -1892,25 +2241,33 @@ function AppShell({ onBack }: { onBack: () => void }) {
                       if (!statusResponse.ok) throw new Error(status.error || 'Could not check document status.');
                       if (status.status === 'ready') {
                         const contentResponse = await fetch(`/api/v1/documents/${uploadResult.id}/content`);
-                        const processed = await readApiJson(contentResponse);
+                        const processed = await readApiJson(contentResponse) as ProcessedDocumentResponse & { error?: string };
                         if (!contentResponse.ok) throw new Error(processed.error || 'Could not load processed document.');
-                        setActiveDoc({
+                        const document: Document = {
                           id: processed.id,
                           name: processed.name,
                           type: processed.type,
-                          uploadedAt: new Date(),
+                          uploadedAt: new Date(uploadedAt),
                           progress: 0,
-                          totalPages: processed.totalPages,
+                          totalPages: processed.totalPages ?? undefined,
                           currentPage: 1,
                           outline: processed.outline,
                           content: processed.content,
-                        });
+                        };
+                        setDocumentCache((previous) => ({ ...previous, [document.id]: document }));
+                        setLibraryDocuments((previous) => previous.map((item) => item.id === document.id
+                          ? { ...item, status: 'ready', total_pages: document.totalPages ?? null }
+                          : item));
+                        setActiveDoc(document);
                         setActiveSectionId(processed.content[0]?.id ?? '');
                         setUploadMessage(`${file.name}: ready.`);
                         completed = true;
                         break;
                       }
                       if (status.status === 'failed') {
+                        setLibraryDocuments((previous) => previous.map((item) => item.id === uploadResult.id
+                          ? { ...item, status: 'failed', error: status.error }
+                          : item));
                         throw new Error(status.error || 'Document processing failed.');
                       }
                     }
@@ -1996,8 +2353,22 @@ function AppShell({ onBack }: { onBack: () => void }) {
                 }}
               />
             )}
+            {panelTab === 'chat' && (
+              <ChatPanel
+                key={activeDoc.id}
+                doc={activeDoc}
+                activeSectionId={activeSectionId}
+              />
+            )}
             {panelTab === 'notes' && <NotesPanel notes={activeSavedNotes} />}
-            {panelTab === 'path' && <LearningPathPanel />}
+            {panelTab === 'path' && (
+              <LearningPathPanel
+                key={activeDoc.id}
+                doc={activeDoc}
+                activeSectionId={activeSectionId}
+                onNavigate={handleNavigateSection}
+              />
+            )}
             {panelTab === 'review' && (
               <ReviewPanel key={activeDoc.id} concepts={activeConcepts} onUpdateState={handleUpdateConceptState} />
             )}

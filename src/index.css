@@ -866,6 +866,130 @@ input, textarea, select { font: inherit; }
   gap: var(--space-3);
 }
 
+.chat-panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.chat-context-note {
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.chat-context-note span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.chat-messages {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.chat-empty {
+  margin: auto;
+  max-width: 240px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.chat-message {
+  max-width: 92%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.chat-message--user {
+  align-self: flex-end;
+  background: var(--accent-dim);
+}
+
+.chat-message--assistant {
+  align-self: flex-start;
+  background: var(--bg-elevated);
+}
+
+.chat-message__author {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.chat-message p {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-thinking,
+.chat-error {
+  padding: 0 var(--space-4);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.chat-error { color: var(--error); }
+
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.chat-composer textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 160px;
+  resize: vertical;
+  padding: 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-composer__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.chat-composer__footer span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.chat-composer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 /* Concept cards */
 .concept-card {
   background: var(--bg-elevated);
