@@ -217,162 +217,32 @@ function useModalEscape(onClose: () => void) {
 // LANDING PAGE
 // =========================================
 function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
-  const features = [
-    {
-      icon: <Icon.BookOpen />,
-      title: 'Document Ingestion',
-      desc: 'Upload PDFs and Word docs. Read in clean reflowable mode or view the original. Navigate by outline. Track reading position.',
-    },
-    {
-      icon: <Icon.Volume2 />,
-      title: 'Synchronized Narration',
-      desc: 'Listen while you read with sentence-level highlighting, adjustable speed, section navigation, and persistent position.',
-    },
-    {
-      icon: <Icon.Lightbulb />,
-      title: 'Concept Capture',
-      desc: 'Select any passage to explain, question, research, or connect it to existing knowledge — without losing your place.',
-    },
-    {
-      icon: <Icon.Search />,
-      title: 'Research Workspace',
-      desc: 'Investigate concepts in a persistent workspace linked to the source passage. Every finding stays connected to what triggered it.',
-    },
-    {
-      icon: <Icon.Map />,
-      title: 'Prerequisite-Aware Learning',
-      desc: 'Clarity proposes a learning sequence based on the document structure and your knowledge state. Override any recommendation.',
-    },
-    {
-      icon: <Icon.Brain />,
-      title: 'Understanding Model',
-      desc: 'Tracks concepts from Encountered → Explained → Recalled → Applied. Reviews are driven by evidence, not reading completion.',
-    },
-    {
-      icon: <Icon.Timer />,
-      title: 'Deep-Work Sessions',
-      desc: 'Start with an intention. Defer stray thoughts to a queue. Stay focused without losing anything that matters.',
-    },
-  ];
-
-  const steps = [
-    { num: '01', title: 'Upload a document', desc: 'PDF or Word doc — Clarity extracts text, structure, and outline automatically.' },
-    { num: '02', title: 'Read & listen', desc: 'Use the focused reader. Play synchronized narration while you follow along.' },
-    { num: '03', title: 'Capture concepts', desc: 'Highlight any passage. Tag it, explain it in your own words, log open questions.' },
-    { num: '04', title: 'Research without leaving', desc: 'Open a research thread from any concept. Notes stay linked to the source passage.' },
-    { num: '05', title: 'Review what matters', desc: 'Clarity surfaces concepts for retrieval practice — rated by your own understanding, not page count.' },
-    { num: '06', title: 'Apply what you learned', desc: 'Mark concepts as applied when you use them in practice. That\'s the finish line.' },
-  ];
-
   return (
     <div className="landing">
-      {/* Nav */}
       <nav className="landing-nav">
         <div className="landing-nav__inner">
-          <div className="landing-logo">
-            <div className="landing-logo__icon">C</div>
-            Clarity
-          </div>
-          <div className="landing-nav__links">
-            <button onClick={onEnterApp} className="btn btn--primary">
-              Open library
-            </button>
-          </div>
+          <button className="landing-nav__link" onClick={onEnterApp}>Library</button>
+          <button className="landing-nav__link" onClick={onEnterApp}>Reading</button>
+          <button className="landing-nav__link" onClick={onEnterApp}>Research</button>
+          <button className="landing-nav__link landing-nav__link--brand" onClick={onEnterApp}>
+            <img className="brand-logo" src="/clarity-logo.png" alt="Clarity" />
+          </button>
+          <button className="landing-nav__link" onClick={onEnterApp}>Concepts</button>
+          <button className="landing-nav__link" onClick={onEnterApp}>Deep work</button>
+          <button className="landing-nav__link" onClick={onEnterApp}>Account</button>
         </div>
       </nav>
 
-      {/* Hero */}
-      <section className="hero">
-        <div className="hero__badge">
-          <div className="hero__badge-dot" />
-          Read deeply · Think clearly
-        </div>
-        <h1 className="hero__title">
-          Read deeply. <span>Think clearly.</span>
-        </h1>
-        <p className="hero__subtitle">
-          Build lasting knowledge from what you read. Keep passages, questions,
-          and ideas connected to their source — without losing your place.
-        </p>
-        <div className="hero__actions">
-          <button onClick={onEnterApp} className="btn btn--primary btn--lg">
-            Open your library
-          </button>
-        </div>
-      </section>
-
-      {/* How it works */}
-      <section className="how-it-works">
-        <p className="section-label">The workflow</p>
-        <h2 className="section-title">From reading to applied understanding</h2>
-        <p className="section-desc">
-          Six stages, designed around how learning actually works — not how note-taking apps assume it does.
-        </p>
-        <div className="steps-list">
-          {steps.map((step, i) => (
-            <div key={i} className="step-item">
-              <div className="step-item__num">{step.num}</div>
-              <div className="step-item__body">
-                <h3 className="step-item__title">{step.title}</h3>
-                <p className="step-item__desc">{step.desc}</p>
-              </div>
-              {i < steps.length - 1 && <div className="step-item__connector" />}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Features */}
-      <section className="features">
-        <p className="section-label">Core capabilities</p>
-        <h2 className="section-title">What Clarity does</h2>
-        <p className="section-desc">
-          Seven interconnected workflows designed around the real friction of studying —
-          not the absence of content, but the absence of a trustworthy system.
-        </p>
-        <div className="features-grid">
-          {features.map((f, i) => (
-            <div key={i} className="feature-card">
-              <div className="feature-card__icon">{f.icon}</div>
-              <h3 className="feature-card__title">{f.title}</h3>
-              <p className="feature-card__desc">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section style={{
-        padding: 'var(--space-9) var(--space-6)',
-        textAlign: 'center',
-        maxWidth: '600px',
-        margin: '0 auto',
-      }}>
-        <h2 className="section-title">Ready to try it?</h2>
-        <p className="section-desc" style={{ margin: '0 auto var(--space-6)' }}>
-          The prototype uses a sample document so you can explore every part of the interface right now.
-        </p>
-        <button onClick={onEnterApp} className="btn btn--primary btn--lg">
-          Open Clarity prototype →
+      <main className="hero">
+        <button className="hero__mark" onClick={onEnterApp} aria-label="Open Clarity">
+          <img className="hero-logo" src="/clarity-logo.png" alt="" />
         </button>
-      </section>
+        <button className="hero__statement" onClick={onEnterApp}>
+          Read deeply.<br />
+          Think clearly.
+        </button>
+      </main>
 
-      {/* Footer */}
-      <footer style={{
-        borderTop: '1px solid var(--border)',
-        padding: 'var(--space-5) var(--space-6)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 'var(--space-3)',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: '13px', color: 'var(--text-muted)' }}>
-          <div className="landing-logo__icon" style={{ width: '20px', height: '20px', fontSize: '10px' }}>C</div>
-          Clarity · Read deeply. Think clearly.
-        </div>
-        <button className="nav-link" onClick={onEnterApp}>Return to your library →</button>
-      </footer>
     </div>
   );
 }
@@ -1832,7 +1702,9 @@ function AppShell({ onBack }: { onBack: () => void }) {
           <Icon.ArrowLeft />
         </button>
         <div className="app-header__logo">
-          <div className="app-header__logo-icon">C</div>
+          <div className="app-header__logo-icon" aria-hidden="true">
+            <img className="app-logo" src="/clarity-logo.png" alt="" />
+          </div>
           Clarity
         </div>
         <div className="app-header__breadcrumb">
@@ -2159,7 +2031,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
 // ROOT APP
 // =========================================
 export default function App() {
-  const [view, setView] = useState<'landing' | 'app'>('app');
+  const [view, setView] = useState<'landing' | 'app'>('landing');
 
   if (view === 'app') {
     return <AppShell onBack={() => setView('landing')} />;
