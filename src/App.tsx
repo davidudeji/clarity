@@ -1575,6 +1575,9 @@ function AppShell({ onBack }: { onBack: () => void }) {
         })),
     ),
   );
+  const activeConcepts = concepts.filter((concept) => concept.documentId === activeDoc.id);
+  const activeResearch = research.filter((note) => note.documentId === activeDoc.id);
+  const activeSavedNotes = savedNotes.filter((note) => note.documentId === activeDoc.id);
   const [panelTab, setPanelTab] = useState<ExtendedPanelTab>('concepts');
   const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
   const [panelOpen, setPanelOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
@@ -1810,7 +1813,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
             <button className={`sidebar-nav-item ${panelTab === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>
               <Icon.Check />
               <span>Highlights & notes</span>
-              {savedNotes.length > 0 && <span className="sidebar-nav-count">{savedNotes.length}</span>}
+              {activeSavedNotes.length > 0 && <span className="sidebar-nav-count">{activeSavedNotes.length}</span>}
             </button>
             <button className={`sidebar-nav-item ${panelTab === 'research' ? 'active' : ''}`} onClick={() => openPanel('research')}>
               <Icon.Search />
@@ -1944,7 +1947,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
             currentSectionId={activeSectionId}
             onNavigateSection={handleNavigateSection}
             onActiveSectionChange={setActiveSectionId}
-            savedQuotes={savedNotes.map((note) => note.quote)}
+            savedQuotes={activeSavedNotes.map((note) => note.quote)}
           />
 
           {/* Right panel */}
@@ -1981,21 +1984,22 @@ function AppShell({ onBack }: { onBack: () => void }) {
               />
             )}
             {panelTab === 'concepts' && (
-              <ConceptsPanel concepts={concepts} onUpdateState={handleUpdateConceptState} />
+              <ConceptsPanel concepts={activeConcepts} onUpdateState={handleUpdateConceptState} />
             )}
             {panelTab === 'research' && (
               <ResearchPanel
-                notes={research}
+                key={activeDoc.id}
+                notes={activeResearch}
                 onAddFinding={() => {
                   const section = activeDoc.content.find((item) => item.id === activeSectionId);
                   setResearchText(section?.paragraphs.map((paragraph) => paragraph.text).join(' ') ?? '');
                 }}
               />
             )}
-            {panelTab === 'notes' && <NotesPanel notes={savedNotes} />}
+            {panelTab === 'notes' && <NotesPanel notes={activeSavedNotes} />}
             {panelTab === 'path' && <LearningPathPanel />}
             {panelTab === 'review' && (
-              <ReviewPanel concepts={concepts} onUpdateState={handleUpdateConceptState} />
+              <ReviewPanel key={activeDoc.id} concepts={activeConcepts} onUpdateState={handleUpdateConceptState} />
             )}
           </aside>
         </main>
