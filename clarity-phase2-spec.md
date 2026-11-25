@@ -25,7 +25,7 @@ Everything in Phase 1 that was mocked must be replaced with real behavior.
 
 | Service | Purpose | Provider Options |
 |---|---|---|
-| **AI reasoning** | Concept explanation, research assistance, learning path generation | OpenAI GPT-4o, Google Gemini 1.5 Pro |
+| **AI reasoning** | Concept explanation, research assistance, learning path generation | Google Gemini 2.5 Flash (free-tier API key) |
 | **Text-to-speech** | Narration with word/sentence timestamps | ElevenLabs, Google TTS, Azure Cognitive |
 | **PDF extraction** | Parse PDF text, headings, page positions | pdf-parse (Node), pdfjs-dist (client) |
 | **DOCX extraction** | Parse Word documents | mammoth.js |
@@ -52,11 +52,10 @@ Everything in Phase 1 that was mocked must be replaced with real behavior.
 │  /api/upload       /api/auth                        │
 └──────┬──────────────┬──────────────────┬────────────┘
        │              │                  │
-  ┌────▼────┐   ┌─────▼─────┐   ┌──────▼──────┐
-  │PostgreSQL│   │  S3 / R2  │   │ AI Provider  │
-  │ (Prisma) │   │  (files)  │   │ (OpenAI /   │
-  └──────────┘   └───────────┘   │  Gemini)    │
-                                 └─────────────┘
+  ┌────▼────┐   ┌─────▼─────┐   ┌───────────────┐
+  │PostgreSQL│   │  S3 / R2  │   │ Google Gemini │
+  │ (Prisma) │   │  (files)  │   │ 2.5 Flash     │
+  └──────────┘   └───────────┘   └───────────────┘
 ```
 
 ### Why a backend?
@@ -180,7 +179,7 @@ USER:
 
 ### 5.3 Structured output
 
-Use OpenAI structured outputs or Gemini response schema:
+Use Gemini response schema:
 
 ```ts
 const ExplanationSchema = z.object({
@@ -516,9 +515,8 @@ app.get('/api/documents', async (req, res) => {
 ## 12. Environment Variables
 
 ```env
-# AI
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o
+# AI (Google AI Studio free-tier key; server-side only)
+GEMINI_API_KEY=...
 
 # TTS
 ELEVENLABS_API_KEY=...
@@ -541,6 +539,8 @@ CLERK_PUBLISHABLE_KEY=pk_...
 VITE_API_BASE_URL=http://localhost:4000
 VITE_CLERK_PUBLISHABLE_KEY=pk_...
 ```
+
+The local prototype uses only Gemini 2.5 Flash for its explanation and research actions. Put `GEMINI_API_KEY` in the server-side `.env` file (never a `VITE_` variable), then run `npm run dev`; the Vite server proxies `/api` requests to the local API server. Free-tier quotas and model availability are controlled by Google and may change.
 
 ---
 

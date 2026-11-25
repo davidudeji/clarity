@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import './index.css';
 import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState } from './types';
 import { sampleDocument, sampleConcepts, sampleResearch } from './utils/sampleData';
+import { explainWithGemini, researchWithGemini } from './utils/gemini';
 
 
 // =========================================
@@ -477,6 +478,10 @@ function ConceptsPanel({ concepts, onUpdateState }: { concepts: Concept[]; onUpd
 function ResearchPanel({ notes }: { notes: ResearchNote[] }) {
   const [activeNote, setActiveNote] = useState<string | null>(notes[0]?.id ?? null);
 
+  useEffect(() => {
+    setActiveNote(notes[0]?.id ?? null);
+  }, [notes.length]);
+
   if (notes.length === 0) {
     return (
       <div className="empty-state">
@@ -790,15 +795,31 @@ function CaptureModal({
   selectedText,
   onClose,
   onSave,
+  onGenerateExplanation,
 }: {
   selectedText: string;
   onClose: () => void;
   onSave: (concept: Omit<Concept, 'id' | 'createdAt' | 'documentId'>) => void;
+  onGenerateExplanation: (quote: string, question: string) => Promise<string>;
 }) {
   const [title, setTitle] = useState('');
   const [explanation, setExplanation] = useState('');
   const [question, setQuestion] = useState('');
   const [knowledgeState, setKnowledgeState] = useState<KnowledgeState>('encountered');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleGenerateExplanation() {
+    setIsGenerating(true);
+    setError('');
+    try {
+      setExplanation(await onGenerateExplanation(selectedText, question));
+    } catch (generationError) {
+      setError(generationError instanceof Error ? generationError.message : 'Gemini could not generate an explanation.');
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -845,6 +866,10 @@ function CaptureModal({
               onChange={(e) => setExplanation(e.target.value)}
               placeholder="Explain this in your own words — why does it matter? How does it connect to what you already know?"
             />
+            <button type="button" className="btn btn--secondary btn--sm" onClick={handleGenerateExplanation} disabled={isGenerating}>
+              {isGenerating ? 'Asking Gemini…' : 'Generate with Gemini'}
+            </button>
+            {error && <p role="alert" style={{ color: 'var(--error)', fontSize: '12px' }}>{error}</p>}
           </div>
           <div className="form-group">
             <label className="form-label">Open question (optional)</label>
@@ -873,6 +898,99 @@ function CaptureModal({
             <button type="submit" className="btn btn--primary">Save concept</button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function ResearchModal({
+  sourceQuote,
+  onClose,
+  onResearch,
+  onSave,
+}: {
+  sourceQuote: string;
+  onClose: () => void;
+  onResearch: (question: string, sourceQuote: string) => Promise<string>;
+  onSave: (question: string, notes: string) => void;
+}) {
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [isResearching, setIsResearching] = useState(false);
+  const [error, setError] = useState('');
+
+  async function handleResearch() {
+    setIsResearching(true);
+    setError('');
+    try {
+      setAnswer(await onResearch(question.trim(), sourceQuote));
+    } catch (researchError) {
+      setError(researchError instanceof Error ? researchError.message : 'Gemini could not research this question.');
+    } finally {
+      setIsResearching(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal__header">
+          <h2 className="modal__title">Research with Gemini</h2>
+          <button className="modal__close" onClick={onClose}><Icon.X /></button>
+        </div>
+        <blockquote style={{
+          fontSize: '13px',
+          color: 'var(--text-secondary)',
+          fontStyle: 'italic',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'var(--bg-elevated)',
+          borderLeft: '2px solid var(--accent)',
+          borderRadius: '0 var(--radius-sm) var(--radius-sm) 0',
+          marginBottom: 'var(--space-5)',
+          lineHeight: '1.6',
+        }}>
+          "{sourceQuote}"
+        </blockquote>
+        <div className="form-group">
+          <label className="form-label">What do you want to investigate?</label>
+          <textarea
+            className="form-input form-textarea"
+            value={question}
+            onChange={(e) => {
+              setQuestion(e.target.value);
+              setAnswer('');
+            }}
+            placeholder="Ask a research question..."
+            required
+          />
+        </div>
+        <div className="form-actions" style={{ justifyContent: 'space-between' }}>
+          <button type="button" className="btn btn--secondary btn--sm" onClick={handleResearch} disabled={!question.trim() || isResearching}>
+            {isResearching ? 'Researching…' : 'Ask Gemini'}
+          </button>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <button type="button" className="btn btn--secondary" onClick={onClose}>Cancel</button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => { onSave(question.trim(), answer); onClose(); }}
+              disabled={!answer}
+            >
+              Save finding
+            </button>
+          </div>
+        </div>
+        {error && <p role="alert" style={{ color: 'var(--error)', fontSize: '12px', marginTop: 'var(--space-3)' }}>{error}</p>}
+        {answer && (
+          <div className="research-item" style={{ marginTop: 'var(--space-4)' }}>
+            <div className="research-item__header">
+              <p className="research-item__question">{question}</p>
+              <span className="tag tag--accent">Gemini synthesis</span>
+            </div>
+            <p className="research-item__notes" style={{ whiteSpace: 'pre-wrap' }}>{answer}</p>
+            <p className="research-item__source">AI-generated; verify suggested sources independently.</p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1091,9 +1209,11 @@ function SelectionTooltip({
 function ReaderPane({
   doc,
   onCapture,
+  onResearch,
 }: {
   doc: Document;
   onCapture: (text: string) => void;
+  onResearch: (text: string) => void;
 }) {
   const [readerMode, setReaderMode] = useState<'focus' | 'original'>('focus');
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
@@ -1179,7 +1299,9 @@ function ReaderPane({
             window.getSelection()?.removeAllRanges();
           }}
           onResearch={() => {
+            onResearch(tooltip.text);
             setTooltip(null);
+            window.getSelection()?.removeAllRanges();
           }}
         />
       )}
@@ -1247,10 +1369,11 @@ type ExtendedPanelTab = PanelTab | 'path';
 function AppShell({ onBack }: { onBack: () => void }) {
   const [activeDoc] = useState<Document>(sampleDocument);
   const [concepts, setConcepts] = useState<Concept[]>(sampleConcepts);
-  const [research] = useState<ResearchNote[]>(sampleResearch);
+  const [research, setResearch] = useState<ResearchNote[]>(sampleResearch);
   const [panelTab, setPanelTab] = useState<ExtendedPanelTab>('concepts');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [captureText, setCaptureText] = useState<string | null>(null);
+  const [researchText, setResearchText] = useState<string | null>(null);
   const [sessionModal, setSessionModal] = useState(false);
   const [session, setSession] = useState<{ intention: string; duration: number } | null>(null);
   const [deferModal, setDeferModal] = useState(false);
@@ -1259,6 +1382,10 @@ function AppShell({ onBack }: { onBack: () => void }) {
 
   function handleCapture(text: string) {
     setCaptureText(text);
+  }
+
+  function handleResearch(text: string) {
+    setResearchText(text);
   }
 
   function handleSaveConcept(partial: Omit<Concept, 'id' | 'createdAt' | 'documentId'>) {
@@ -1274,6 +1401,19 @@ function AppShell({ onBack }: { onBack: () => void }) {
 
   function handleUpdateConceptState(id: string, state: KnowledgeState) {
     setConcepts(prev => prev.map(c => c.id === id ? { ...c, knowledgeState: state } : c));
+  }
+
+  function handleSaveResearch(question: string, notes: string) {
+    setResearch((prev) => [{
+      id: `r-${Date.now()}`,
+      documentId: activeDoc.id,
+      question,
+      source: 'Gemini AI synthesis',
+      notes,
+      createdAt: new Date(),
+    }, ...prev]);
+    setPanelTab('research');
+    setResearchText(null);
   }
 
   function handleDeferThought(thought: string) {
@@ -1386,7 +1526,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
         {/* Main */}
         <main className="app-main">
           {/* Reader */}
-          <ReaderPane doc={activeDoc} onCapture={handleCapture} />
+          <ReaderPane doc={activeDoc} onCapture={handleCapture} onResearch={handleResearch} />
 
           {/* Right panel */}
           <aside className="app-panel">
@@ -1422,6 +1562,15 @@ function AppShell({ onBack }: { onBack: () => void }) {
           selectedText={captureText}
           onClose={() => setCaptureText(null)}
           onSave={handleSaveConcept}
+          onGenerateExplanation={(quote, question) => explainWithGemini(quote, question)}
+        />
+      )}
+      {researchText && (
+        <ResearchModal
+          sourceQuote={researchText}
+          onClose={() => setResearchText(null)}
+          onResearch={(question, sourceQuote) => researchWithGemini(question, sourceQuote)}
+          onSave={handleSaveResearch}
         />
       )}
       {sessionModal && (
