@@ -505,12 +505,21 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
   const [loadingHistory, setLoadingHistory] = useState(true);
   const [error, setError] = useState('');
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const requestControllerRef = useRef<AbortController | null>(null);
   const conversationIdRef = useRef('');
+  const shouldAutoScrollRef = useRef(true);
 
   useEffect(() => {
-    endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (shouldAutoScrollRef.current) {
+      endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [messages, sending]);
+
+  function handleMessagesScroll(event: React.UIEvent<HTMLDivElement>) {
+    const element = event.currentTarget;
+    shouldAutoScrollRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 72;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -555,6 +564,7 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
     requestControllerRef.current?.abort();
     setSending(false);
     setError('');
+    shouldAutoScrollRef.current = true;
     setConversationId(nextId);
     conversationIdRef.current = nextId;
     window.localStorage.setItem(`clarity-active-conversation:${doc.id}`, nextId);
@@ -569,6 +579,7 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
     requestControllerRef.current?.abort();
     setSending(false);
     setError('');
+    shouldAutoScrollRef.current = true;
     try {
       const created = await createChatConversation(doc.id);
       setConversations((previous) => [created, ...previous]);
@@ -587,6 +598,7 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
     const activeConversationId = conversationIdRef.current;
     if (!userQuestion || sending || !activeConversationId) return;
 
+    shouldAutoScrollRef.current = true;
     const timestamp = new Date().toISOString();
     setMessages((previous) => [
       ...previous,
@@ -700,7 +712,7 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
         Ask anything about <strong>{doc.name}</strong>. No text selection needed.
         <span>Context uses the current section and nearby document text.</span>
       </div>
-      <div className="chat-messages" aria-live="polite">
+      <div className="chat-messages" ref={messagesContainerRef} onScroll={handleMessagesScroll} aria-live="polite">
         {loadingHistory && <p className="chat-thinking" role="status">Restoring conversation…</p>}
         {!loadingHistory && messages.length === 0 && (
           <p className="chat-empty">Ask a question to start a conversation about this document.</p>

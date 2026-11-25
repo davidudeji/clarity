@@ -26,9 +26,24 @@ export interface PersistedChatMessage extends GeminiChatMessage {
   updatedAt: string;
 }
 
+async function readJsonResponse<T>(response: Response, serviceName: string): Promise<T & { error?: string }> {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    const hint = response.status === 404
+      ? ' Restart the app with npm run dev so the API routes are up to date.'
+      : '';
+    throw new Error(`${serviceName} returned a non-JSON response (HTTP ${response.status}).${hint}`);
+  }
+  try {
+    return await response.json() as T & { error?: string };
+  } catch {
+    throw new Error(`${serviceName} returned invalid JSON.`);
+  }
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const result = await response.json() as T & { error?: string };
+  const result = await readJsonResponse<T>(response, 'Chat service');
   if (!response.ok) {
     throw new Error(result.error || `Request failed with status ${response.status}.`);
   }
@@ -81,7 +96,7 @@ export async function streamPersistentChat(
     signal,
   });
   if (!response.ok) {
-    const result = await response.json() as GeminiResponse;
+    const result = await readJsonResponse<GeminiResponse>(response, 'Chat service');
     throw new Error(result.error || `Chat request failed with status ${response.status}.`);
   }
   if (!response.body) throw new Error('Your browser does not support streaming chat responses.');
@@ -147,7 +162,7 @@ async function requestGemini(path: string, body: Record<string, unknown>): Promi
     body: JSON.stringify(body),
   });
 
-  const result = await response.json() as GeminiResponse;
+  const result = await readJsonResponse<GeminiResponse>(response, 'Gemini service');
   if (!response.ok) {
     throw new Error(result.error || `Gemini request failed with status ${response.status}.`);
   }
@@ -188,7 +203,7 @@ export async function streamChatWithGemini(
   });
 
   if (!response.ok) {
-    const result = await response.json() as GeminiResponse;
+    const result = await readJsonResponse<GeminiResponse>(response, 'Chat service');
     throw new Error(result.error || `Chat request failed with status ${response.status}.`);
   }
   if (!response.body) throw new Error('Your browser does not support streaming chat responses.');

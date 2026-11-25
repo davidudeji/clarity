@@ -931,6 +931,13 @@ app.post('/api/v1/documents/upload', upload.single('file'), async (req, res) => 
   }
 
   const type = /\.pdf$/i.test(req.file.originalname) ? 'pdf' : 'docx';
+  const isValidSignature = type === 'pdf'
+    ? req.file.buffer.subarray(0, 1024).includes(Buffer.from('%PDF-'))
+    : req.file.buffer.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  if (!isValidSignature) {
+    return res.status(400).json({ error: `The uploaded file content does not match a valid ${type.toUpperCase()} document.` });
+  }
+
   const id = randomUUID();
   const extension = type === 'pdf' ? '.pdf' : '.docx';
   const originalPath = path.join(documentsDirectory, `${id}${extension}`);
@@ -1029,11 +1036,36 @@ app.get('/api/v1/documents/:id/original', (req, res) => {
 app.delete('/api/v1/documents/:id', async (req, res) => {
   const row = db.prepare('SELECT original_path FROM documents WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: 'Document not found.' });
-  db.prepare('DELETE FROM chunks WHERE document_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM processing_jobs WHERE document_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
-  await unlink(row.original_path).catch(() => {});
+  try {
+    await unlink(row.original_path);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      return res.status(500).json({ error: 'Could not remove the original document. Please try again.' });
+    }
+  }
+  const deleteDocument = db.transaction(() => {
+    db.prepare('DELETE FROM chunks WHERE document_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM processing_jobs WHERE document_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM documents WHERE id = ?').run(req.params.id);
+  });
+  deleteDocument();
   res.status(204).end();
+});
+
+app.use((error, _req, res, next) => {
+  if (res.headersSent) return next(error);
+  if (error instanceof multer.MulterError) {
+    const status = error.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const message = error.code === 'LIMIT_FILE_SIZE'
+      ? 'The uploaded file exceeds the 50 MB limit.'
+      : 'The uploaded file could not be accepted.';
+    return res.status(status).json({ error: message });
+  }
+  if (error?.message === 'Only PDF and DOCX files are supported.') {
+    return res.status(400).json({ error: error.message });
+  }
+  console.error('Unhandled API request error:', error instanceof Error ? error.message : 'Unknown error');
+  return res.status(500).json({ error: 'The server could not complete this request.' });
 });
 
 app.listen(port, '127.0.0.1', () => {
