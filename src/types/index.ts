@@ -55,6 +55,8 @@ export interface ResearchNote {
   documentId: string;
   question: string;
   source: string;
+  sourceQuote?: string;
+  page?: number;
   notes: string;
   createdAt: Date;
 }

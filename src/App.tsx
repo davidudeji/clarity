@@ -4,6 +4,15 @@ import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState } from '
 import { sampleDocument, sampleConcepts, sampleResearch } from './utils/sampleData';
 import { explainWithGemini, researchWithGemini } from './utils/gemini';
 
+interface SavedPassageNote {
+  id: string;
+  documentId: string;
+  quote: string;
+  note: string;
+  page: number;
+  createdAt: Date;
+}
+
 
 // =========================================
 // ICONS (inline SVG to avoid extra deps)
@@ -167,27 +176,41 @@ function KnowledgeBadge({ state }: { state: KnowledgeState }) {
 // =========================================
 // SESSION TIMER HOOK
 // =========================================
-function useSessionTimer(isActive: boolean) {
-  const [elapsed, setElapsed] = useState(0);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
+function useSessionTimer(isActive: boolean, durationMinutes: number, isPaused: boolean) {
+  const [remaining, setRemaining] = useState(durationMinutes * 60);
   useEffect(() => {
-    if (isActive) {
-      intervalRef.current = setInterval(() => {
-        setElapsed(prev => prev + 1);
-      }, 1000);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      setElapsed(0);
+    if (!isActive) {
+      setRemaining(durationMinutes * 60);
+      return;
     }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isActive]);
+    if (isPaused) return;
 
-  const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
-  const seconds = (elapsed % 60).toString().padStart(2, '0');
+    const interval = setInterval(() => {
+      setRemaining((value) => {
+        if (value <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isActive, durationMinutes, isPaused]);
+
+  const minutes = Math.floor(remaining / 60).toString().padStart(2, '0');
+  const seconds = (remaining % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
+}
+
+function useModalEscape(onClose: () => void) {
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose();
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
 }
 
 // =========================================
@@ -196,37 +219,37 @@ function useSessionTimer(isActive: boolean) {
 function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
   const features = [
     {
-      icon: '📄',
+      icon: <Icon.BookOpen />,
       title: 'Document Ingestion',
       desc: 'Upload PDFs and Word docs. Read in clean reflowable mode or view the original. Navigate by outline. Track reading position.',
     },
     {
-      icon: '🔊',
+      icon: <Icon.Volume2 />,
       title: 'Synchronized Narration',
       desc: 'Listen while you read with sentence-level highlighting, adjustable speed, section navigation, and persistent position.',
     },
     {
-      icon: '💡',
+      icon: <Icon.Lightbulb />,
       title: 'Concept Capture',
       desc: 'Select any passage to explain, question, research, or connect it to existing knowledge — without losing your place.',
     },
     {
-      icon: '🔍',
+      icon: <Icon.Search />,
       title: 'Research Workspace',
       desc: 'Investigate concepts in a persistent workspace linked to the source passage. Every finding stays connected to what triggered it.',
     },
     {
-      icon: '🗺️',
+      icon: <Icon.Map />,
       title: 'Prerequisite-Aware Learning',
       desc: 'Clarity proposes a learning sequence based on the document structure and your knowledge state. Override any recommendation.',
     },
     {
-      icon: '🧠',
+      icon: <Icon.Brain />,
       title: 'Understanding Model',
       desc: 'Tracks concepts from Encountered → Explained → Recalled → Applied. Reviews are driven by evidence, not reading completion.',
     },
     {
-      icon: '⏱️',
+      icon: <Icon.Timer />,
       title: 'Deep-Work Sessions',
       desc: 'Start with an intention. Defer stray thoughts to a queue. Stay focused without losing anything that matters.',
     },
@@ -251,16 +274,8 @@ function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
             Clarity
           </div>
           <div className="landing-nav__links">
-            <a
-              href="http://localhost:3000/product/clarity"
-              className="nav-link"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              ← Back to portfolio
-            </a>
             <button onClick={onEnterApp} className="btn btn--primary">
-              Open App
+              Open library
             </button>
           </div>
         </div>
@@ -270,29 +285,19 @@ function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
       <section className="hero">
         <div className="hero__badge">
           <div className="hero__badge-dot" />
-          In Design · Phase 1 Active
+          Read deeply · Think clearly
         </div>
         <h1 className="hero__title">
-          Understand what you <span>read.</span>
+          Read deeply. <span>Think clearly.</span>
         </h1>
         <p className="hero__subtitle">
-          Clarity turns documents into structured understanding.
-          Investigate what you don't know, learn in the right order,
-          and apply what matters — without losing concentration.
+          Build lasting knowledge from what you read. Keep passages, questions,
+          and ideas connected to their source — without losing your place.
         </p>
         <div className="hero__actions">
           <button onClick={onEnterApp} className="btn btn--primary btn--lg">
-            Try the prototype
+            Open your library
           </button>
-          <a
-            href="http://localhost:3000/product/clarity"
-            className="btn btn--secondary btn--lg"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Icon.ExternalLink />
-            View product spec
-          </a>
         </div>
       </section>
 
@@ -364,17 +369,9 @@ function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', fontSize: '13px', color: 'var(--text-muted)' }}>
           <div className="landing-logo__icon" style={{ width: '20px', height: '20px', fontSize: '10px' }}>C</div>
-          Clarity by David Udeji · 2024
+          Clarity · Read deeply. Think clearly.
         </div>
-        <a
-          href="http://localhost:3000/product/clarity"
-          style={{ fontSize: '13px', color: 'var(--text-muted)' }}
-          className="nav-link"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Product specification →
-        </a>
+        <button className="nav-link" onClick={onEnterApp}>Return to your library →</button>
       </footer>
     </div>
   );
@@ -383,7 +380,15 @@ function LandingPage({ onEnterApp }: { onEnterApp: () => void }) {
 // =========================================
 // PANEL: OUTLINE
 // =========================================
-function OutlinePanel({ doc }: { doc: Document }) {
+function OutlinePanel({
+  doc,
+  activeSectionId,
+  onNavigate,
+}: {
+  doc: Document;
+  activeSectionId: string;
+  onNavigate: (sectionId: string) => void;
+}) {
   return (
     <div className="panel-body">
       <div className="outline-progress">
@@ -396,13 +401,15 @@ function OutlinePanel({ doc }: { doc: Document }) {
         <span className="outline-progress__pct">{doc.progress}%</span>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-        {doc.outline.map((item) => (
-          <div
+        {doc.outline.filter((item) => doc.content.some((section) => section.id === item.sectionId)).map((item) => (
+          <button
             key={item.id}
-            className={`outline-item outline-item--h${item.level} ${item.id === 'o7' ? 'active' : ''}`}
+            className={`outline-item outline-item--h${item.level} ${item.sectionId === activeSectionId ? 'active' : ''}`}
+            onClick={() => onNavigate(item.sectionId)}
+            aria-current={item.sectionId === activeSectionId ? 'location' : undefined}
           >
             {item.title}
-          </div>
+          </button>
         ))}
       </div>
     </div>
@@ -475,7 +482,7 @@ function ConceptsPanel({ concepts, onUpdateState }: { concepts: Concept[]; onUpd
 // =========================================
 // PANEL: RESEARCH
 // =========================================
-function ResearchPanel({ notes }: { notes: ResearchNote[] }) {
+function ResearchPanel({ notes, onAddFinding }: { notes: ResearchNote[]; onAddFinding: () => void }) {
   const [activeNote, setActiveNote] = useState<string | null>(notes[0]?.id ?? null);
 
   useEffect(() => {
@@ -516,15 +523,46 @@ function ResearchPanel({ notes }: { notes: ResearchNote[] }) {
               <p className="research-item__question">{current.question}</p>
               <span className="tag tag--accent">Open</span>
             </div>
+            {current.sourceQuote && <blockquote className="concept-card__quote">“{current.sourceQuote}”</blockquote>}
             <p className="research-item__source">src: {current.source}</p>
+            {current.page && <p className="research-item__source">p. {current.page}</p>}
             <p className="research-item__notes">{current.notes}</p>
           </div>
-          <button className="btn btn--secondary btn--sm" style={{ alignSelf: 'flex-start' }}>
+          <button className="btn btn--secondary btn--sm" style={{ alignSelf: 'flex-start' }} onClick={onAddFinding}>
             <Icon.Plus />
-            Add finding
+            Research another passage
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function NotesPanel({ notes }: { notes: SavedPassageNote[] }) {
+  if (notes.length === 0) {
+    return (
+      <div className="empty-state">
+        <div className="empty-state__icon"><Icon.BookOpen /></div>
+        <p className="empty-state__title">No saved passages yet</p>
+        <p className="empty-state__desc">Select a passage in the reader and save it as a highlight or note.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="panel-body">
+      {notes.map((note) => (
+        <article className="saved-note" key={note.id}>
+          <blockquote className="concept-card__quote">“{note.quote}”</blockquote>
+          {note.note && <p className="saved-note__text">{note.note}</p>}
+          <div className="saved-note__meta">
+            <span>p. {note.page}</span>
+            <time dateTime={note.createdAt.toISOString()}>
+              {note.createdAt.toLocaleDateString()}
+            </time>
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
@@ -802,6 +840,7 @@ function CaptureModal({
   onSave: (concept: Omit<Concept, 'id' | 'createdAt' | 'documentId'>) => void;
   onGenerateExplanation: (quote: string, question: string) => Promise<string>;
 }) {
+  useModalEscape(onClose);
   const [title, setTitle] = useState('');
   const [explanation, setExplanation] = useState('');
   const [question, setQuestion] = useState('');
@@ -829,9 +868,9 @@ function CaptureModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="capture-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 className="modal__title">Capture concept</h2>
+          <h2 className="modal__title" id="capture-title">Capture concept</h2>
           <button className="modal__close" onClick={onClose}><Icon.X /></button>
         </div>
         <blockquote style={{
@@ -903,6 +942,47 @@ function CaptureModal({
   );
 }
 
+function NoteModal({
+  quote,
+  onClose,
+  onSave,
+}: {
+  quote: string;
+  onClose: () => void;
+  onSave: (quote: string, note: string) => void;
+}) {
+  useModalEscape(onClose);
+  const [note, setNote] = useState('');
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal modal--compact" role="dialog" aria-modal="true" aria-labelledby="note-title" onClick={(event) => event.stopPropagation()}>
+        <div className="modal__header">
+          <h2 className="modal__title" id="note-title">Save passage</h2>
+          <button className="modal__close" onClick={onClose} aria-label="Close note dialog"><Icon.X /></button>
+        </div>
+        <blockquote className="note-modal__quote">“{quote}”</blockquote>
+        <div className="form-group">
+          <label className="form-label" htmlFor="passage-note">Your note <span className="form-label__optional">optional</span></label>
+          <textarea
+            id="passage-note"
+            className="form-input form-textarea"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            placeholder="Add your own observation..."
+          />
+        </div>
+        <div className="form-actions">
+          <button className="btn btn--secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn--primary" onClick={() => { onSave(quote, note.trim()); onClose(); }}>
+            Save to notes
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ResearchModal({
   sourceQuote,
   onClose,
@@ -912,8 +992,9 @@ function ResearchModal({
   sourceQuote: string;
   onClose: () => void;
   onResearch: (question: string, sourceQuote: string) => Promise<string>;
-  onSave: (question: string, notes: string) => void;
+  onSave: (question: string, notes: string, sourceQuote: string) => void;
 }) {
+  useModalEscape(onClose);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [isResearching, setIsResearching] = useState(false);
@@ -933,9 +1014,9 @@ function ResearchModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="research-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 className="modal__title">Research with Gemini</h2>
+          <h2 className="modal__title" id="research-title">Research with Gemini</h2>
           <button className="modal__close" onClick={onClose}><Icon.X /></button>
         </div>
         <blockquote style={{
@@ -973,7 +1054,7 @@ function ResearchModal({
             <button
               type="button"
               className="btn btn--primary"
-              onClick={() => { onSave(question.trim(), answer); onClose(); }}
+              onClick={() => { onSave(question.trim(), answer, sourceQuote); onClose(); }}
               disabled={!answer}
             >
               Save finding
@@ -1000,14 +1081,15 @@ function ResearchModal({
 // SESSION MODAL
 // =========================================
 function SessionModal({ onClose, onStart }: { onClose: () => void; onStart: (intention: string, duration: number) => void }) {
+  useModalEscape(onClose);
   const [intention, setIntention] = useState('');
   const [duration, setDuration] = useState(25);
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="session-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 className="modal__title">Start deep-work session</h2>
+          <h2 className="modal__title" id="session-title">Start deep-work session</h2>
           <button className="modal__close" onClick={onClose}><Icon.X /></button>
         </div>
         <p style={{ fontSize: '14px', color: 'var(--text-secondary)', lineHeight: '1.65', marginBottom: 'var(--space-5)' }}>
@@ -1058,6 +1140,7 @@ function SessionModal({ onClose, onStart }: { onClose: () => void; onStart: (int
 // DEFERRED THOUGHT CAPTURE
 // =========================================
 function DeferredCaptureModal({ onClose, onSave }: { onClose: () => void; onSave: (thought: string) => void }) {
+  useModalEscape(onClose);
   const [thought, setThought] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -1067,9 +1150,9 @@ function DeferredCaptureModal({ onClose, onSave }: { onClose: () => void; onSave
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal modal--compact" onClick={(e) => e.stopPropagation()}>
+      <div className="modal modal--compact" role="dialog" aria-modal="true" aria-labelledby="deferred-title" onClick={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 className="modal__title">
+          <h2 className="modal__title" id="deferred-title">
             <Icon.Inbox /> Defer thought
           </h2>
           <button className="modal__close" onClick={onClose}><Icon.X /></button>
@@ -1113,17 +1196,27 @@ function DeferredCaptureModal({ onClose, onSave }: { onClose: () => void; onSave
 function SessionBanner({
   intention,
   isActive,
+  durationMinutes,
+  isPaused,
   deferredCount,
   onEnd,
   onDefer,
+  onTogglePause,
 }: {
   intention: string;
   isActive: boolean;
+  durationMinutes: number;
+  isPaused: boolean;
   deferredCount: number;
   onEnd: () => void;
   onDefer: () => void;
+  onTogglePause: () => void;
 }) {
-  const time = useSessionTimer(isActive);
+  const time = useSessionTimer(isActive, durationMinutes, isPaused);
+
+  useEffect(() => {
+    if (isActive && !isPaused && time === '00:00') onEnd();
+  }, [time, isActive, isPaused, onEnd]);
 
   return (
     <div className="session-banner">
@@ -1131,14 +1224,21 @@ function SessionBanner({
       <div className="session-banner__info">
         <div className="session-banner__title">{intention || 'Deep work session'}</div>
         <div className="session-banner__desc">
-          {deferredCount > 0
+          {time === '00:00'
+            ? 'Session complete'
+            : isPaused
+              ? 'Session paused'
+              : deferredCount > 0
             ? `${deferredCount} thought${deferredCount > 1 ? 's' : ''} deferred`
-            : 'Stay focused · stray thoughts go to the queue'}
+            : `${durationMinutes} minute focus session · stray thoughts go to the queue`}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
         <button className="btn btn--ghost btn--sm" onClick={onDefer} title="Defer a thought">
           <Icon.Inbox />
+        </button>
+        <button className="btn btn--ghost btn--sm" onClick={onTogglePause} title={isPaused ? 'Resume session' : 'Pause session'} aria-label={isPaused ? 'Resume session' : 'Pause session'}>
+          {isPaused ? <Icon.Play /> : <Icon.Pause />}
         </button>
         <button className="btn btn--ghost btn--sm" onClick={onEnd}>
           End
@@ -1176,31 +1276,62 @@ function DeferredDrawer({ thoughts, onDismiss }: { thoughts: string[]; onDismiss
 // SELECTION TOOLTIP
 // =========================================
 function SelectionTooltip({
-  x, y, onCapture, onResearch,
+  x, y, onCapture, onResearch, onNote, onCopy,
 }: {
   x: number; y: number;
   onCapture: () => void;
   onResearch: () => void;
+  onNote: () => void;
+  onCopy: () => void;
 }) {
   return (
     <div
       className="selection-tooltip"
-      style={{ top: y - 56, left: x - 140 }}
+      style={{ top: y - 56, left: x - 165 }}
+      role="toolbar"
+      aria-label="Selected passage actions"
     >
       <button className="tooltip-action" onClick={onCapture}>
         <Icon.Lightbulb />
-        Capture
+        Explain
       </button>
       <button className="tooltip-action" onClick={onResearch}>
         <Icon.Search />
         Research
       </button>
-      <button className="tooltip-action" onClick={() => {}}>
+      <button className="tooltip-action" onClick={onNote}>
         <Icon.Plus />
-        Question
+        Note
+      </button>
+      <button className="tooltip-action" onClick={onCopy}>
+        Copy
       </button>
     </div>
   );
+}
+
+function renderHighlightedText(text: string, quotes: string[]): React.ReactNode {
+  const ranges = quotes
+    .map((quote) => {
+      const start = text.indexOf(quote);
+      return start < 0 ? null : { start, end: start + quote.length };
+    })
+    .filter((range): range is { start: number; end: number } => range !== null)
+    .sort((left, right) => left.start - right.start || right.end - left.end)
+    .filter((range, index, all) =>
+      all.slice(0, index).every((previous) => range.start >= previous.end || range.end <= previous.start),
+    );
+
+  if (ranges.length === 0) return text;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  ranges.forEach((range, index) => {
+    if (range.start > cursor) parts.push(text.slice(cursor, range.start));
+    parts.push(<mark className="reader-saved-highlight" key={`highlight-${index}`}>{text.slice(range.start, range.end)}</mark>);
+    cursor = range.end;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
 // =========================================
@@ -1210,14 +1341,50 @@ function ReaderPane({
   doc,
   onCapture,
   onResearch,
+  onNote,
+  focusMode,
+  onToggleFocus,
+  currentSectionId,
+  onNavigateSection,
+  onActiveSectionChange,
+  savedQuotes,
 }: {
   doc: Document;
   onCapture: (text: string) => void;
   onResearch: (text: string) => void;
+  onNote: (text: string) => void;
+  focusMode: boolean;
+  onToggleFocus: () => void;
+  currentSectionId: string;
+  onNavigateSection: (sectionId: string) => void;
+  onActiveSectionChange: (sectionId: string) => void;
+  savedQuotes: string[];
 }) {
-  const [readerMode, setReaderMode] = useState<'focus' | 'original'>('focus');
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [copyStatus, setCopyStatus] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
+
+  const currentSectionIndex = doc.content.findIndex((section) => section.id === currentSectionId);
+
+  function navigateSection(index: number) {
+    const section = doc.content[index];
+    if (!section) return;
+    onNavigateSection(section.id);
+    document.getElementById(`reader-${section.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function updateActiveSection() {
+    if (!readerRef.current) return;
+    const sections = Array.from(readerRef.current.querySelectorAll<HTMLElement>('.reader-section'));
+    const marker = readerRef.current.getBoundingClientRect().top + 80;
+    const active = sections.find((section) => {
+      const bounds = section.getBoundingClientRect();
+      return bounds.top <= marker && bounds.bottom > marker;
+    }) ?? sections.find((section) => section.getBoundingClientRect().top > marker) ?? sections[sections.length - 1];
+    const sectionId = active?.id.replace(/^reader-/, '');
+    if (sectionId && sectionId !== currentSectionId) onActiveSectionChange(sectionId);
+  }
 
   const handleMouseUp = useCallback(() => {
     const selection = window.getSelection();
@@ -1227,12 +1394,25 @@ function ReaderPane({
     }
     const range = selection.getRangeAt(0);
     const rect = range.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
     setTooltip({
-      x: rect.left + rect.width / 2,
-      y: rect.top,
+      x: Math.max(175, Math.min(x, window.innerWidth - 175)),
+      y: Math.max(64, rect.top),
       text: selection.toString().trim(),
     });
   }, []);
+
+  async function copySelection() {
+    if (!tooltip) return;
+    try {
+      await navigator.clipboard.writeText(tooltip.text);
+      setCopyStatus('Passage copied');
+      setTooltip(null);
+      window.getSelection()?.removeAllRanges();
+    } catch {
+      setCopyStatus('Clipboard access is unavailable in this browser');
+    }
+  }
 
   return (
     <div className="reader-pane">
@@ -1240,27 +1420,58 @@ function ReaderPane({
       <div className="reader-toolbar">
         <div className="reader-toolbar__group">
           <button
-            className={`reader-mode-btn ${readerMode === 'focus' ? 'active' : ''}`}
-            onClick={() => setReaderMode('focus')}
+            className={`reader-mode-btn ${focusMode ? 'active' : ''}`}
+            onClick={onToggleFocus}
+            aria-pressed={focusMode}
+            title={focusMode ? 'Exit focus mode' : 'Enter focus mode'}
           >
             <Icon.BookOpen />
-            Focus
-          </button>
-          <button
-            className={`reader-mode-btn ${readerMode === 'original' ? 'active' : ''}`}
-            onClick={() => setReaderMode('original')}
-          >
-            Original
+            {focusMode ? 'Exit focus' : 'Focus mode'}
           </button>
         </div>
         <div className="reader-toolbar__sep" />
-        <div className="reader-toolbar__group" style={{ color: 'var(--text-muted)', fontSize: '12px', fontFamily: 'var(--font-mono)' }}>
-          p. {doc.currentPage} / {doc.totalPages}
+        <div className="reader-section-nav" aria-label="Document section navigation">
+          <button
+            className="icon-btn"
+            onClick={() => navigateSection(currentSectionIndex - 1)}
+            disabled={currentSectionIndex <= 0}
+            aria-label="Previous section"
+          >
+            <Icon.ArrowLeft />
+          </button>
+          <select
+            className="reader-section-select"
+            value={currentSectionId}
+            onChange={(event) => navigateSection(doc.content.findIndex((section) => section.id === event.target.value))}
+            aria-label="Current document section"
+          >
+            {doc.content.map((section, index) => (
+              <option key={section.id} value={section.id}>
+                {index + 1} of {doc.content.length} · {section.title || 'Untitled section'}
+              </option>
+            ))}
+          </select>
+          <button
+            className="icon-btn"
+            onClick={() => navigateSection(currentSectionIndex + 1)}
+            disabled={currentSectionIndex >= doc.content.length - 1}
+            aria-label="Next section"
+          >
+            <Icon.ChevronRight />
+          </button>
         </div>
-        <div style={{ marginLeft: 'auto' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-muted)' }}>
-            <span>Select a passage to capture or research</span>
-          </div>
+        <div className="reader-toolbar__sep" />
+        <div className="reader-zoom" aria-label="Reading text size">
+          <button className="icon-btn" onClick={() => setZoom((value) => Math.max(0.8, value - 0.1))} aria-label="Decrease text size">
+            A−
+          </button>
+          <span>{Math.round(zoom * 100)}%</span>
+          <button className="icon-btn" onClick={() => setZoom((value) => Math.min(1.4, value + 0.1))} aria-label="Increase text size">
+            A+
+          </button>
+        </div>
+        <div className="reader-toolbar__hint">
+          Select text to explain, research, or save
         </div>
       </div>
 
@@ -1269,24 +1480,25 @@ function ReaderPane({
         className="reader-body"
         ref={readerRef}
         onMouseUp={handleMouseUp}
+        onScroll={updateActiveSection}
         onClick={() => !window.getSelection()?.toString() && setTooltip(null)}
       >
         <div className="reader-content">
           {doc.content.map((section) => (
-            <div key={section.id}>
-              {section.title && <h2>{section.title}</h2>}
+            <section id={`reader-${section.id}`} key={section.id} className="reader-section">
+              {section.title && <h2 style={{ fontSize: `${20 * zoom}px` }}>{section.title}</h2>}
               {section.paragraphs.map((para) => (
-                <p key={para.id} className={para.isHighlight ? 'highlight' : ''}>
-                  {para.text}
+                <p key={para.id} className={para.isHighlight ? 'highlight' : ''} style={{ fontSize: `${16 * zoom}px` }}>
+                  {renderHighlightedText(para.text, savedQuotes)}
                 </p>
               ))}
-            </div>
+            </section>
           ))}
         </div>
       </div>
 
       {/* Narration bar */}
-      <NarrationBar />
+      <NarrationBar text={doc.content.flatMap((section) => section.paragraphs.map((paragraph) => paragraph.text)).join(' ')} />
 
       {/* Selection tooltip */}
       {tooltip && (
@@ -1303,7 +1515,18 @@ function ReaderPane({
             setTooltip(null);
             window.getSelection()?.removeAllRanges();
           }}
+          onNote={() => {
+            onNote(tooltip.text);
+            setTooltip(null);
+            window.getSelection()?.removeAllRanges();
+          }}
+          onCopy={copySelection}
         />
+      )}
+      {copyStatus && (
+        <div className="reader-copy-status" role="status" onAnimationEnd={() => setCopyStatus('')}>
+          {copyStatus}
+        </div>
       )}
     </div>
   );
@@ -1312,50 +1535,139 @@ function ReaderPane({
 // =========================================
 // NARRATION BAR
 // =========================================
-function NarrationBar() {
+function NarrationBar({ text }: { text: string }) {
   const [playing, setPlaying] = useState(false);
+  const [paused, setPaused] = useState(false);
   const [speed, setSpeed] = useState(1.0);
+  const [sentenceIndex, setSentenceIndex] = useState(0);
+  const [error, setError] = useState('');
+  const playingRef = useRef(false);
+  const speedRef = useRef(speed);
+  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [text];
   const speeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+  useEffect(() => {
+    speedRef.current = speed;
+  }, [speed]);
+
+  useEffect(() => () => {
+    playingRef.current = false;
+    window.speechSynthesis?.cancel();
+  }, []);
+
+  function speakSentence(index: number) {
+    if (index >= sentences.length) {
+      playingRef.current = false;
+      setPlaying(false);
+      setPaused(false);
+      setSentenceIndex(0);
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(sentences[index]);
+    utterance.rate = speedRef.current;
+    utterance.onend = () => {
+      if (!playingRef.current) return;
+      const nextIndex = index + 1;
+      if (nextIndex < sentences.length) {
+        setSentenceIndex(nextIndex);
+        speakSentence(nextIndex);
+      } else {
+        playingRef.current = false;
+        setPlaying(false);
+        setPaused(false);
+        setSentenceIndex(0);
+      }
+    };
+    utterance.onerror = (event) => {
+      if (event.error === 'canceled' || event.error === 'interrupted') return;
+      playingRef.current = false;
+      setPlaying(false);
+      setPaused(false);
+      setError('Browser narration could not play this document.');
+    };
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function togglePlayback() {
+    setError('');
+    if (!('speechSynthesis' in window)) {
+      setError('Browser narration is not available in this browser.');
+      return;
+    }
+
+    if (playing) {
+      playingRef.current = false;
+      window.speechSynthesis.pause();
+      setPlaying(false);
+      setPaused(true);
+      return;
+    }
+
+    playingRef.current = true;
+    setPlaying(true);
+    if (paused) {
+      window.speechSynthesis.resume();
+      setPaused(false);
+      return;
+    }
+
+    const startIndex = sentenceIndex >= sentences.length ? 0 : sentenceIndex;
+    setSentenceIndex(startIndex);
+    speakSentence(startIndex);
+  }
+
+  function skipTo(index: number) {
+    const nextIndex = Math.max(0, Math.min(sentences.length - 1, index));
+    const shouldResume = playing || paused;
+    playingRef.current = false;
+    window.speechSynthesis?.cancel();
+    setSentenceIndex(nextIndex);
+    setPaused(false);
+    if (shouldResume && 'speechSynthesis' in window) {
+      playingRef.current = true;
+      setPlaying(true);
+      speakSentence(nextIndex);
+    } else {
+      setPlaying(false);
+    }
+  }
 
   function cycleSpeed() {
     const idx = speeds.indexOf(speed);
     setSpeed(speeds[(idx + 1) % speeds.length]);
   }
 
+  const progress = sentences.length > 0 ? ((sentenceIndex + (playing ? 0.35 : 0)) / sentences.length) * 100 : 0;
+
   return (
     <div className="narration-bar">
       <div className="narration-bar__controls">
-        <button className="narration-btn"><Icon.SkipBack /></button>
+        <button className="narration-btn" onClick={() => skipTo(sentenceIndex - 1)} aria-label="Previous sentence"><Icon.SkipBack /></button>
         <button
           className="narration-btn narration-btn--play"
-          onClick={() => setPlaying(!playing)}
-          aria-label={playing ? 'Pause narration' : 'Play narration'}
+          onClick={togglePlayback}
+          aria-label={playing ? 'Pause narration' : paused ? 'Resume narration' : 'Play narration'}
         >
           {playing ? <Icon.Pause /> : <Icon.Play />}
         </button>
-        <button className="narration-btn"><Icon.SkipForward /></button>
+        <button className="narration-btn" onClick={() => skipTo(sentenceIndex + 1)} aria-label="Next sentence"><Icon.SkipForward /></button>
       </div>
 
       <div className="narration-bar__progress">
-        <div className="narration-bar__sentence">
-          {playing
-            ? 'You have a finite amount of willpower that becomes depleted as you use it…'
-            : 'Synchronized narration · sentence-level highlighting'}
+        <div className="narration-bar__sentence" aria-live="polite">
+          {error || sentences[sentenceIndex] || 'Select play to listen'}
         </div>
         <div className="narration-bar__time">
-          <span className="time-text">4:12</span>
-          <div className="progress-bar" style={{ flex: 1 }}>
-            <div className="progress-bar__fill" style={{ width: '34%' }} />
+          <span className="time-text">{Math.min(sentenceIndex + 1, sentences.length)} / {sentences.length}</span>
+          <div className="progress-bar" style={{ flex: 1 }} role="progressbar" aria-label="Narration progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress)}>
+            <div className="progress-bar__fill" style={{ width: `${progress}%` }} />
           </div>
-          <span className="time-text">12:21</span>
         </div>
       </div>
 
       <button className="narration-bar__speed" onClick={cycleSpeed}>
         {speed}×
-      </button>
-      <button className="icon-btn">
-        <Icon.Volume2 />
       </button>
     </div>
   );
@@ -1364,21 +1676,76 @@ function NarrationBar() {
 // =========================================
 // FULL APP SHELL
 // =========================================
-type ExtendedPanelTab = PanelTab | 'path';
+type ExtendedPanelTab = PanelTab | 'path' | 'notes';
 
 function AppShell({ onBack }: { onBack: () => void }) {
   const [activeDoc] = useState<Document>(sampleDocument);
+  const [activeSectionId, setActiveSectionId] = useState(sampleDocument.content[0]?.id ?? '');
   const [concepts, setConcepts] = useState<Concept[]>(sampleConcepts);
   const [research, setResearch] = useState<ResearchNote[]>(sampleResearch);
+  const [savedNotes, setSavedNotes] = useState<SavedPassageNote[]>(() =>
+    sampleDocument.content.flatMap((section) =>
+      section.paragraphs
+        .filter((paragraph) => paragraph.isHighlight)
+        .map((paragraph) => ({
+          id: paragraph.id,
+          documentId: sampleDocument.id,
+          quote: paragraph.text,
+          note: '',
+          page: sampleDocument.currentPage ?? 1,
+          createdAt: new Date(sampleDocument.uploadedAt),
+        })),
+    ),
+  );
   const [panelTab, setPanelTab] = useState<ExtendedPanelTab>('concepts');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
+  const [panelOpen, setPanelOpen] = useState(() => window.matchMedia('(min-width: 769px)').matches);
+  const [focusMode, setFocusMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [uploadMessage, setUploadMessage] = useState('');
   const [captureText, setCaptureText] = useState<string | null>(null);
   const [researchText, setResearchText] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState<string | null>(null);
   const [sessionModal, setSessionModal] = useState(false);
-  const [session, setSession] = useState<{ intention: string; duration: number } | null>(null);
+  const [session, setSession] = useState<{ intention: string; duration: number; paused: boolean } | null>(null);
   const [deferModal, setDeferModal] = useState(false);
   const [deferredThoughts, setDeferredThoughts] = useState<string[]>([]);
   const [showDeferred, setShowDeferred] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    function handleSearchShortcut(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+      }
+    }
+
+    window.addEventListener('keydown', handleSearchShortcut);
+    return () => window.removeEventListener('keydown', handleSearchShortcut);
+  }, []);
+
+  useEffect(() => {
+    const desktopLayout = window.matchMedia('(min-width: 769px)');
+    function handleLayoutChange(event: MediaQueryListEvent) {
+      setSidebarOpen(event.matches);
+      setPanelOpen(event.matches);
+    }
+
+    desktopLayout.addEventListener('change', handleLayoutChange);
+    return () => desktopLayout.removeEventListener('change', handleLayoutChange);
+  }, []);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    function handleSettingsEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setSettingsOpen(false);
+    }
+
+    window.addEventListener('keydown', handleSettingsEscape);
+    return () => window.removeEventListener('keydown', handleSettingsEscape);
+  }, [settingsOpen]);
 
   function handleCapture(text: string) {
     setCaptureText(text);
@@ -1386,6 +1753,29 @@ function AppShell({ onBack }: { onBack: () => void }) {
 
   function handleResearch(text: string) {
     setResearchText(text);
+  }
+
+  function handleNavigateSection(sectionId: string) {
+    setActiveSectionId(sectionId);
+    document.getElementById(`reader-${sectionId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function openPanel(tab: ExtendedPanelTab) {
+    setPanelTab(tab);
+    setPanelOpen(true);
+    if (window.innerWidth <= 768) setSidebarOpen(false);
+  }
+
+  function handleSavePassage(quote: string, note: string) {
+    setSavedNotes((previous) => [{
+      id: `note-${Date.now()}`,
+      documentId: activeDoc.id,
+      quote,
+      note,
+      page: activeDoc.currentPage ?? 1,
+      createdAt: new Date(),
+    }, ...previous]);
+    openPanel('notes');
   }
 
   function handleSaveConcept(partial: Omit<Concept, 'id' | 'createdAt' | 'documentId'>) {
@@ -1396,23 +1786,25 @@ function AppShell({ onBack }: { onBack: () => void }) {
       createdAt: new Date(),
     };
     setConcepts((prev) => [newConcept, ...prev]);
-    setPanelTab('concepts');
+    openPanel('concepts');
   }
 
   function handleUpdateConceptState(id: string, state: KnowledgeState) {
     setConcepts(prev => prev.map(c => c.id === id ? { ...c, knowledgeState: state } : c));
   }
 
-  function handleSaveResearch(question: string, notes: string) {
+  function handleSaveResearch(question: string, notes: string, sourceQuote: string) {
     setResearch((prev) => [{
       id: `r-${Date.now()}`,
       documentId: activeDoc.id,
       question,
       source: 'Gemini AI synthesis',
+      sourceQuote,
+      page: activeDoc.currentPage,
       notes,
       createdAt: new Date(),
     }, ...prev]);
-    setPanelTab('research');
+    openPanel('research');
     setResearchText(null);
   }
 
@@ -1427,17 +1819,16 @@ function AppShell({ onBack }: { onBack: () => void }) {
 
   const panelTabs: { id: ExtendedPanelTab; label: string; icon: React.ReactNode }[] = [
     { id: 'outline', label: 'Outline', icon: <Icon.BookOpen /> },
-    { id: 'concepts', label: `Concepts (${concepts.length})`, icon: <Icon.Lightbulb /> },
+    { id: 'concepts', label: 'Concepts', icon: <Icon.Lightbulb /> },
     { id: 'research', label: 'Research', icon: <Icon.Search /> },
-    { id: 'path', label: 'Path', icon: <Icon.Map /> },
-    { id: 'review', label: 'Review', icon: <Icon.Brain /> },
+    { id: 'notes', label: 'Notes', icon: <Icon.Plus /> },
   ];
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${focusMode ? 'app-shell--focus' : ''}`}>
       {/* Header */}
       <header className="app-header">
-        <button className="icon-btn" onClick={onBack} title="Back to landing">
+        <button className="icon-btn app-back-button" onClick={onBack} title="Back to landing" aria-label="Back to landing">
           <Icon.ArrowLeft />
         </button>
         <div className="app-header__logo">
@@ -1448,6 +1839,18 @@ function AppShell({ onBack }: { onBack: () => void }) {
           <Icon.ChevronRight />
           <span>{activeDoc.name}</span>
         </div>
+        <label className="app-header__search">
+          <Icon.Search />
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search library"
+            aria-label="Search library"
+          />
+          <kbd>⌘ K</kbd>
+        </label>
         <div className="app-header__actions">
           {session && (
             <button
@@ -1469,8 +1872,23 @@ function AppShell({ onBack }: { onBack: () => void }) {
             <Icon.Timer />
             {session ? 'End session' : 'Deep work'}
           </button>
-          <button className="icon-btn" onClick={() => setSidebarOpen(!sidebarOpen)} title="Toggle sidebar">
+          <button
+            className={`icon-btn ${sidebarOpen ? 'active' : ''}`}
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            title="Toggle library sidebar"
+            aria-label="Toggle library sidebar"
+            aria-pressed={sidebarOpen}
+          >
             <Icon.Menu />
+          </button>
+          <button
+            className={`icon-btn ${panelOpen ? 'active' : ''}`}
+            onClick={() => setPanelOpen(!panelOpen)}
+            title="Toggle knowledge panel"
+            aria-label="Toggle knowledge panel"
+            aria-pressed={panelOpen}
+          >
+            <Icon.BookOpen />
           </button>
         </div>
       </header>
@@ -1480,9 +1898,12 @@ function AppShell({ onBack }: { onBack: () => void }) {
         <SessionBanner
           intention={session.intention}
           isActive={!!session}
+          durationMinutes={session.duration}
+          isPaused={session.paused}
           deferredCount={deferredThoughts.length}
           onEnd={() => setSession(null)}
           onDefer={() => setDeferModal(true)}
+          onTogglePause={() => setSession((current) => current ? { ...current, paused: !current.paused } : current)}
         />
       )}
 
@@ -1497,57 +1918,154 @@ function AppShell({ onBack }: { onBack: () => void }) {
       {/* Body */}
       <div className="app-body">
         {/* Sidebar */}
-        <aside className={`app-sidebar ${sidebarOpen ? '' : 'collapsed'}`}>
+        <aside
+          className={`app-sidebar ${sidebarOpen ? 'open' : 'collapsed'}`}
+          aria-hidden={!sidebarOpen || focusMode}
+        >
+          <nav className="sidebar-primary-nav" aria-label="Primary navigation">
+            <button className={`sidebar-nav-item ${panelTab === 'outline' || panelTab === 'concepts' ? 'active' : ''}`} onClick={() => openPanel('outline')}>
+              <Icon.BookOpen />
+              <span>Library</span>
+            </button>
+            <button className={`sidebar-nav-item ${panelTab === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>
+              <Icon.Check />
+              <span>Highlights & notes</span>
+              {savedNotes.length > 0 && <span className="sidebar-nav-count">{savedNotes.length}</span>}
+            </button>
+            <button className={`sidebar-nav-item ${panelTab === 'research' ? 'active' : ''}`} onClick={() => openPanel('research')}>
+              <Icon.Search />
+              <span>Research</span>
+            </button>
+            <button className="sidebar-nav-item" onClick={() => setSessionModal(true)}>
+              <Icon.Timer />
+              <span>Deep work</span>
+            </button>
+            <button className="sidebar-nav-item" onClick={() => setSettingsOpen(true)}>
+              <Icon.Menu />
+              <span>Settings</span>
+            </button>
+          </nav>
           <div className="sidebar-section">
-            <p className="sidebar-section__label">Library</p>
+            <p className="sidebar-section__label">Reading now</p>
           </div>
           <div className="sidebar-doc-list">
-            <div className="doc-item active">
-              <span className="doc-item__icon">📄</span>
-              <span className="doc-item__name">{activeDoc.name}</span>
-              <div className="doc-item__progress">
-                <div className="doc-item__progress-bar" style={{ width: `${activeDoc.progress}%` }} />
-              </div>
-            </div>
+            {activeDoc.name.toLowerCase().includes(searchQuery.toLowerCase()) ? (
+              <button className="doc-item active" onClick={() => { setPanelOpen(false); setSidebarOpen(false); }}>
+                <span className="doc-item__icon">PDF</span>
+                <span className="doc-item__name">{activeDoc.name}</span>
+                <span className="doc-item__progress-text">{activeDoc.progress}%</span>
+                <div className="doc-item__progress">
+                  <div className="doc-item__progress-bar" style={{ width: `${activeDoc.progress}%` }} />
+                </div>
+              </button>
+            ) : (
+              <p className="sidebar-search-empty">No documents match “{searchQuery}”.</p>
+            )}
           </div>
-          <div
-            className="upload-zone"
-            onClick={() => alert('Upload: In a full implementation, this would open a file picker for PDF/DOCX files.')}
-          >
+          <div className="sidebar-learning">
+            <p className="sidebar-section__label">Study</p>
+            <button className="sidebar-nav-item" onClick={() => openPanel('path')}>
+              <Icon.Map />
+              <span>Learning path</span>
+            </button>
+            <button className="sidebar-nav-item" onClick={() => openPanel('review')}>
+              <Icon.Brain />
+              <span>Review concepts</span>
+            </button>
+          </div>
+          <label className="upload-zone" htmlFor="document-upload">
+            <input
+              id="document-upload"
+              type="file"
+              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                const validType = /\.(pdf|docx)$/i.test(file.name);
+                if (!validType) {
+                  setUploadMessage('Choose a PDF or DOCX file.');
+                } else if (file.size > 50 * 1024 * 1024) {
+                  setUploadMessage('This file is over the 50 MB limit.');
+                } else {
+                  setUploadMessage(`${file.name}: document processing is not connected yet.`);
+                }
+                event.target.value = '';
+              }}
+            />
             <div className="upload-zone__icon">
               <Icon.Upload />
             </div>
             <div className="upload-zone__text">
-              Drop a PDF or Word doc here<br />or click to browse
+              Add a document<br />PDF or DOCX
             </div>
-          </div>
+          </label>
+          {uploadMessage && <p className="upload-message" role="status">{uploadMessage}</p>}
         </aside>
+        {sidebarOpen && (
+          <button className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} aria-label="Close library sidebar" />
+        )}
 
         {/* Main */}
         <main className="app-main">
-          {/* Reader */}
-          <ReaderPane doc={activeDoc} onCapture={handleCapture} onResearch={handleResearch} />
+          <ReaderPane
+            doc={activeDoc}
+            onCapture={handleCapture}
+            onResearch={handleResearch}
+            onNote={(text) => setNoteText(text)}
+            focusMode={focusMode}
+            onToggleFocus={() => setFocusMode((value) => !value)}
+            currentSectionId={activeSectionId}
+            onNavigateSection={handleNavigateSection}
+            onActiveSectionChange={setActiveSectionId}
+            savedQuotes={savedNotes.map((note) => note.quote)}
+          />
 
           {/* Right panel */}
-          <aside className="app-panel">
-            <div className="panel-tabs">
-              {panelTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  className={`panel-tab ${panelTab === tab.id ? 'active' : ''}`}
-                  onClick={() => setPanelTab(tab.id)}
-                >
-                  {tab.icon}
-                  {tab.label}
-                </button>
-              ))}
+          <aside
+            className={`app-panel ${panelOpen ? 'app-panel--open' : 'app-panel--closed'}`}
+            aria-label="Knowledge assistant"
+            aria-hidden={!panelOpen || focusMode}
+          >
+            <div className="app-panel__header">
+              <div className="panel-tabs" role="tablist" aria-label="Knowledge tools">
+                {panelTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    className={`panel-tab ${panelTab === tab.id ? 'active' : ''}`}
+                    onClick={() => { setPanelTab(tab.id); setPanelOpen(true); }}
+                    role="tab"
+                    aria-selected={panelTab === tab.id}
+                  >
+                    {tab.icon}
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <button className="panel-close" onClick={() => setPanelOpen(false)} aria-label="Close knowledge panel">
+                <Icon.X />
+              </button>
             </div>
 
-            {panelTab === 'outline' && <OutlinePanel doc={activeDoc} />}
+            {panelTab === 'outline' && (
+              <OutlinePanel
+                doc={activeDoc}
+                activeSectionId={activeSectionId}
+                onNavigate={handleNavigateSection}
+              />
+            )}
             {panelTab === 'concepts' && (
               <ConceptsPanel concepts={concepts} onUpdateState={handleUpdateConceptState} />
             )}
-            {panelTab === 'research' && <ResearchPanel notes={research} />}
+            {panelTab === 'research' && (
+              <ResearchPanel
+                notes={research}
+                onAddFinding={() => {
+                  const section = activeDoc.content.find((item) => item.id === activeSectionId);
+                  setResearchText(section?.paragraphs.map((paragraph) => paragraph.text).join(' ') ?? '');
+                }}
+              />
+            )}
+            {panelTab === 'notes' && <NotesPanel notes={savedNotes} />}
             {panelTab === 'path' && <LearningPathPanel />}
             {panelTab === 'review' && (
               <ReviewPanel concepts={concepts} onUpdateState={handleUpdateConceptState} />
@@ -1556,6 +2074,29 @@ function AppShell({ onBack }: { onBack: () => void }) {
         </main>
       </div>
 
+      <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
+        <button className={`mobile-bottom-nav__item ${panelTab !== 'notes' && panelTab !== 'research' ? 'active' : ''}`} onClick={() => { setSidebarOpen(true); setPanelOpen(false); }}>
+          <Icon.BookOpen />
+          <span>Library</span>
+        </button>
+        <button className={`mobile-bottom-nav__item ${panelTab === 'notes' ? 'active' : ''}`} onClick={() => { setPanelTab('notes'); setPanelOpen(true); setSidebarOpen(false); }}>
+          <Icon.Check />
+          <span>Highlights</span>
+        </button>
+        <button className={`mobile-bottom-nav__item ${panelTab === 'research' ? 'active' : ''}`} onClick={() => { setPanelTab('research'); setPanelOpen(true); setSidebarOpen(false); }}>
+          <Icon.Search />
+          <span>Research</span>
+        </button>
+        <button className="mobile-bottom-nav__item" onClick={() => setSettingsOpen(true)}>
+          <Icon.Menu />
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      {panelOpen && (
+        <button className="panel-backdrop" onClick={() => setPanelOpen(false)} aria-label="Close knowledge panel" />
+      )}
+
       {/* Modals */}
       {captureText && (
         <CaptureModal
@@ -1563,6 +2104,13 @@ function AppShell({ onBack }: { onBack: () => void }) {
           onClose={() => setCaptureText(null)}
           onSave={handleSaveConcept}
           onGenerateExplanation={(quote, question) => explainWithGemini(quote, question)}
+        />
+      )}
+      {noteText && (
+        <NoteModal
+          quote={noteText}
+          onClose={() => setNoteText(null)}
+          onSave={handleSavePassage}
         />
       )}
       {researchText && (
@@ -1576,7 +2124,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
       {sessionModal && (
         <SessionModal
           onClose={() => setSessionModal(false)}
-          onStart={(intention, duration) => setSession({ intention, duration })}
+          onStart={(intention, duration) => setSession({ intention, duration, paused: false })}
         />
       )}
       {deferModal && (
@@ -1584,6 +2132,24 @@ function AppShell({ onBack }: { onBack: () => void }) {
           onClose={() => setDeferModal(false)}
           onSave={handleDeferThought}
         />
+      )}
+      {settingsOpen && (
+        <div className="modal-backdrop" onClick={() => setSettingsOpen(false)}>
+          <section className="modal modal--compact" role="dialog" aria-modal="true" aria-labelledby="settings-title" onClick={(event) => event.stopPropagation()}>
+            <div className="modal__header">
+              <h2 className="modal__title" id="settings-title">Settings</h2>
+              <button className="modal__close" onClick={() => setSettingsOpen(false)} aria-label="Close settings"><Icon.X /></button>
+            </div>
+            <div className="settings-provider">
+              <span className="settings-provider__label">AI provider</span>
+              <strong>Google Gemini 2.5 Flash</strong>
+              <p>Your API key stays on the local server and is never included in the browser.</p>
+            </div>
+            <div className="form-actions">
+              <button className="btn btn--primary" onClick={() => setSettingsOpen(false)}>Done</button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
@@ -1593,7 +2159,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
 // ROOT APP
 // =========================================
 export default function App() {
-  const [view, setView] = useState<'landing' | 'app'>('landing');
+  const [view, setView] = useState<'landing' | 'app'>('app');
 
   if (view === 'app') {
     return <AppShell onBack={() => setView('landing')} />;
