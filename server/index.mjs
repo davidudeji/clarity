@@ -133,7 +133,7 @@ function processDocument(documentId) {
   });
   activeWorkers.set(documentId, worker);
 
-  updateJob({
+  updateJob.run({
     id: job.id,
     status: 'processing',
     attempt: job.attempt + 1,
@@ -144,7 +144,7 @@ function processDocument(documentId) {
   worker.once('message', (message) => {
     const now = new Date().toISOString();
     if (!message.ok) {
-      updateDocument({
+      updateDocument.run({
         id: documentId,
         status: 'failed',
         total_pages: null,
@@ -155,11 +155,11 @@ function processDocument(documentId) {
         error: message.error,
         updated_at: now,
       });
-      updateJob({ id: job.id, status: 'failed', attempt: job.attempt + 1, error: message.error, updated_at: now });
+      updateJob.run({ id: job.id, status: 'failed', attempt: job.attempt + 1, error: message.error, updated_at: now });
       return;
     }
 
-    updateDocument({
+    updateDocument.run({
       id: documentId,
       status: 'ready',
       total_pages: message.extracted.totalPages ?? null,
@@ -171,7 +171,7 @@ function processDocument(documentId) {
       updated_at: now,
     });
     db.prepare('DELETE FROM chunks WHERE document_id = ?').run(documentId);
-    message.chunks.forEach((chunk) => insertChunk({
+    message.chunks.forEach((chunk) => insertChunk.run({
       id: chunk.id,
       document_id: documentId,
       chunk_index: chunk.chunkIndex,
@@ -182,12 +182,12 @@ function processDocument(documentId) {
       section: chunk.section,
       embedding_model: null,
     }));
-    updateJob({ id: job.id, status: 'completed', attempt: job.attempt + 1, error: null, updated_at: now });
+    updateJob.run({ id: job.id, status: 'completed', attempt: job.attempt + 1, error: null, updated_at: now });
   });
 
   worker.once('error', (error) => {
     const now = new Date().toISOString();
-    updateDocument({
+    updateDocument.run({
       id: documentId,
       status: 'failed',
       total_pages: null,
@@ -198,7 +198,7 @@ function processDocument(documentId) {
       error: error.message,
       updated_at: now,
     });
-    updateJob({ id: job.id, status: 'failed', attempt: job.attempt + 1, error: error.message, updated_at: now });
+    updateJob.run({ id: job.id, status: 'failed', attempt: job.attempt + 1, error: error.message, updated_at: now });
   });
 
   worker.once('exit', () => activeWorkers.delete(documentId));
@@ -303,7 +303,7 @@ app.post('/api/v1/documents/upload', upload.single('file'), async (req, res) => 
   }
 
   const now = new Date().toISOString();
-  insertDocument({
+  insertDocument.run({
     id,
     name: req.file.originalname,
     type,
@@ -317,7 +317,7 @@ app.post('/api/v1/documents/upload', upload.single('file'), async (req, res) => 
     updated_at: now,
   });
   const jobId = randomUUID();
-  insertJob({
+  insertJob.run({
     id: jobId,
     document_id: id,
     status: 'queued',
