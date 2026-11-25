@@ -213,6 +213,14 @@ function useModalEscape(onClose: () => void) {
   }, [onClose]);
 }
 
+async function readApiJson(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.toLowerCase().includes('application/json')) {
+    throw new Error('Document service did not respond. Restart the app with npm run dev, then try again.');
+  }
+  return response.json();
+}
+
 // =========================================
 // LANDING PAGE
 // =========================================
@@ -1549,7 +1557,7 @@ function NarrationBar({ text }: { text: string }) {
 type ExtendedPanelTab = PanelTab | 'path' | 'notes';
 
 function AppShell({ onBack }: { onBack: () => void }) {
-  const [activeDoc] = useState<Document>(sampleDocument);
+  const [activeDoc, setActiveDoc] = useState<Document>(sampleDocument);
   const [activeSectionId, setActiveSectionId] = useState(sampleDocument.content[0]?.id ?? '');
   const [concepts, setConcepts] = useState<Concept[]>(sampleConcepts);
   const [research, setResearch] = useState<ResearchNote[]>(sampleResearch);
@@ -1850,7 +1858,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
               id="document-upload"
               type="file"
               accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onChange={(event) => {
+              onChange={async (event) => {
                 const file = event.target.files?.[0];
                 if (!file) return;
                 const validType = /\.(pdf|docx)$/i.test(file.name);
@@ -1859,7 +1867,54 @@ function AppShell({ onBack }: { onBack: () => void }) {
                 } else if (file.size > 50 * 1024 * 1024) {
                   setUploadMessage('This file is over the 50 MB limit.');
                 } else {
-                  setUploadMessage(`${file.name}: document processing is not connected yet.`);
+                  setUploadMessage(`Uploading ${file.name}...`);
+                  const form = new FormData();
+                  form.append('file', file);
+                  try {
+                    const uploadResponse = await fetch('/api/v1/documents/upload', {
+                      method: 'POST',
+                      body: form,
+                    });
+                    const uploadResult = await readApiJson(uploadResponse);
+                    if (!uploadResponse.ok) {
+                      throw new Error(uploadResult.error || 'Document upload failed.');
+                    }
+
+                    setUploadMessage(`Processing ${file.name}...`);
+                    let completed = false;
+                    for (let attempt = 0; attempt < 60; attempt += 1) {
+                      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                      const statusResponse = await fetch(`/api/v1/documents/${uploadResult.id}/status`);
+                      const status = await readApiJson(statusResponse);
+                      if (!statusResponse.ok) throw new Error(status.error || 'Could not check document status.');
+                      if (status.status === 'ready') {
+                        const contentResponse = await fetch(`/api/v1/documents/${uploadResult.id}/content`);
+                        const processed = await readApiJson(contentResponse);
+                        if (!contentResponse.ok) throw new Error(processed.error || 'Could not load processed document.');
+                        setActiveDoc({
+                          id: processed.id,
+                          name: processed.name,
+                          type: processed.type,
+                          uploadedAt: new Date(),
+                          progress: 0,
+                          totalPages: processed.totalPages,
+                          currentPage: 1,
+                          outline: processed.outline,
+                          content: processed.content,
+                        });
+                        setActiveSectionId(processed.content[0]?.id ?? '');
+                        setUploadMessage(`${file.name}: ready.`);
+                        completed = true;
+                        break;
+                      }
+                      if (status.status === 'failed') {
+                        throw new Error(status.error || 'Document processing failed.');
+                      }
+                    }
+                    if (!completed) setUploadMessage(`Still processing ${file.name}. Check back in a moment.`);
+                  } catch (error) {
+                    setUploadMessage(error instanceof Error ? error.message : 'Document upload failed.');
+                  }
                 }
                 event.target.value = '';
               }}
