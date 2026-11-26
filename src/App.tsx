@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import './index.css';
 import type { Document, Concept, ResearchNote, PanelTab, KnowledgeState, OutlineItem, Section, Paragraph } from './types';
 import { sampleDocument, sampleConcepts, sampleResearch } from './utils/sampleData';
@@ -272,6 +272,143 @@ async function fetchProcessedDocument(id: string, uploadedAt: string): Promise<D
   };
 }
 
+// =========================================
+// BACKEND API HELPERS (concepts, notes, research)
+// =========================================
+interface PersistedConcept {
+  id: string;
+  documentId: string | null;
+  title: string;
+  quote: string;
+  explanation: string;
+  question?: string | null;
+  knowledgeState: KnowledgeState;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PersistedResearchNote {
+  id: string;
+  documentId: string | null;
+  question: string;
+  source: string;
+  sourceQuote: string;
+  page?: number | null;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface PersistedPassageNote {
+  id: string;
+  documentId: string | null;
+  quote: string;
+  note: string;
+  page?: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function conceptFromPersisted(raw: PersistedConcept): Concept {
+  return {
+    id: raw.id,
+    documentId: raw.documentId ?? '',
+    title: raw.title,
+    quote: raw.quote,
+    explanation: raw.explanation,
+    question: raw.question ?? undefined,
+    knowledgeState: raw.knowledgeState,
+    tags: raw.tags,
+    createdAt: new Date(raw.createdAt),
+  };
+}
+
+async function apiSaveConcept(documentId: string, partial: Omit<Concept, 'id' | 'createdAt' | 'documentId'>): Promise<Concept> {
+  const response = await fetch('/api/v1/concepts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId, ...partial, tags: partial.tags ?? [] }),
+  });
+  const result = await readApiJson(response) as PersistedConcept & { error?: string };
+  if (!response.ok) throw new Error(result.error || 'Could not save concept.');
+  return conceptFromPersisted(result);
+}
+
+async function apiUpdateConceptState(id: string, knowledgeState: KnowledgeState): Promise<void> {
+  await fetch(`/api/v1/concepts/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ knowledgeState }),
+  });
+}
+
+async function apiListConcepts(documentId: string): Promise<Concept[]> {
+  const response = await fetch(`/api/v1/concepts?documentId=${encodeURIComponent(documentId)}`);
+  const result = await readApiJson(response) as { concepts: PersistedConcept[] };
+  return (result.concepts ?? []).map(conceptFromPersisted);
+}
+
+async function apiSaveResearch(documentId: string, question: string, source: string, sourceQuote: string, page: number | undefined, notes: string): Promise<ResearchNote> {
+  const response = await fetch('/api/v1/research', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId, question, source, sourceQuote, page: page ?? null, notes }),
+  });
+  const result = await readApiJson(response) as PersistedResearchNote & { error?: string };
+  if (!response.ok) throw new Error(result.error || 'Could not save research note.');
+  return {
+    id: result.id,
+    documentId: result.documentId ?? '',
+    question: result.question,
+    source: result.source,
+    sourceQuote: result.sourceQuote,
+    page: result.page ?? undefined,
+    notes: result.notes,
+    createdAt: new Date(result.createdAt),
+  };
+}
+
+async function apiListResearch(documentId: string): Promise<ResearchNote[]> {
+  const response = await fetch(`/api/v1/research?documentId=${encodeURIComponent(documentId)}`);
+  const result = await readApiJson(response) as { notes: PersistedResearchNote[] };
+  return (result.notes ?? []).map((r) => ({
+    id: r.id, documentId: r.documentId ?? '', question: r.question, source: r.source,
+    sourceQuote: r.sourceQuote, page: r.page ?? undefined, notes: r.notes, createdAt: new Date(r.createdAt),
+  }));
+}
+
+async function apiSavePassageNote(documentId: string, quote: string, note: string, page: number | undefined): Promise<SavedPassageNote> {
+  const response = await fetch('/api/v1/notes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ documentId, quote, note, page: page ?? null }),
+  });
+  const result = await readApiJson(response) as PersistedPassageNote & { error?: string };
+  if (!response.ok) throw new Error(result.error || 'Could not save passage note.');
+  return { id: result.id, documentId: result.documentId ?? '', quote: result.quote, note: result.note, page: result.page ?? 1, createdAt: new Date(result.createdAt) };
+}
+
+async function apiListPassageNotes(documentId: string): Promise<SavedPassageNote[]> {
+  const response = await fetch(`/api/v1/notes?documentId=${encodeURIComponent(documentId)}`);
+  const result = await readApiJson(response) as { notes: PersistedPassageNote[] };
+  return (result.notes ?? []).map((r) => ({
+    id: r.id, documentId: r.documentId ?? '', quote: r.quote, note: r.note,
+    page: r.page ?? 1, createdAt: new Date(r.createdAt),
+  }));
+}
+
+async function fetchAppConfig(): Promise<{ model: string }> {
+  try {
+    const response = await fetch('/api/v1/config');
+    if (!response.ok) return { model: 'Google Gemini' };
+    const data = await response.json() as { model?: string };
+    return { model: data.model || 'Google Gemini' };
+  } catch {
+    return { model: 'Google Gemini' };
+  }
+}
+
 function getDocumentChatContext(doc: Document, activeSectionId: string): string {
   const sections = doc.content;
   const foundIndex = sections.findIndex((section) => section.id === activeSectionId);
@@ -496,6 +633,118 @@ function ResearchPanel({ notes, onAddFinding }: { notes: ResearchNote[]; onAddFi
   );
 }
 
+// =========================================
+// MARKDOWN RENDERER (no external deps)
+// =========================================
+function renderMarkdown(text: string): React.ReactNode {
+  const lines = text.split('\n');
+  const nodes: React.ReactNode[] = [];
+  let i = 0;
+
+  function parseInline(raw: string): React.ReactNode[] {
+    const parts: React.ReactNode[] = [];
+    // Regex matches: fenced code, bold, italic, inline code
+    const pattern = /(`{3}[\s\S]*?`{3}|`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g;
+    let last = 0;
+    let match: RegExpExecArray | null;
+    let key = 0;
+    while ((match = pattern.exec(raw)) !== null) {
+      if (match.index > last) parts.push(raw.slice(last, match.index));
+      const token = match[0];
+      if (token.startsWith('**')) {
+        parts.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+      } else if (token.startsWith('*')) {
+        parts.push(<em key={key++}>{token.slice(1, -1)}</em>);
+      } else if (token.startsWith('`')) {
+        parts.push(<code key={key++} className="md-code">{token.replace(/^`+|`+$/g, '')}</code>);
+      }
+      last = match.index + token.length;
+    }
+    if (last < raw.length) parts.push(raw.slice(last));
+    return parts;
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Fenced code block
+    if (line.trimStart().startsWith('```')) {
+      const lang = line.trim().slice(3).trim();
+      const codeLines: string[] = [];
+      i += 1;
+      while (i < lines.length && !lines[i].trimStart().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      nodes.push(
+        <pre key={i} className="md-pre"><code className={lang ? `language-${lang}` : ''}>{codeLines.join('\n')}</code></pre>
+      );
+      i += 1;
+      continue;
+    }
+
+    // Headings
+    const headingMatch = /^(#{1,4})\s+(.+)$/.exec(line);
+    if (headingMatch) {
+      const level = headingMatch[1].length as 1 | 2 | 3 | 4;
+      const Tag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4';
+      nodes.push(<Tag key={i} className={`md-h${level}`}>{parseInline(headingMatch[2])}</Tag>);
+      i += 1;
+      continue;
+    }
+
+    // Unordered list items
+    if (/^[\s]*[-*]\s/.test(line)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && /^[\s]*[-*]\s/.test(lines[i])) {
+        const content = lines[i].replace(/^[\s]*[-*]\s/, '');
+        items.push(<li key={i}>{parseInline(content)}</li>);
+        i += 1;
+      }
+      nodes.push(<ul key={`ul-${i}`} className="md-ul">{items}</ul>);
+      continue;
+    }
+
+    // Ordered list items
+    if (/^\d+\.\s/.test(line)) {
+      const items: React.ReactNode[] = [];
+      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
+        const content = lines[i].replace(/^\d+\.\s/, '');
+        items.push(<li key={i}>{parseInline(content)}</li>);
+        i += 1;
+      }
+      nodes.push(<ol key={`ol-${i}`} className="md-ol">{items}</ol>);
+      continue;
+    }
+
+    // Blank line — skip
+    if (line.trim() === '') {
+      i += 1;
+      continue;
+    }
+
+    // Paragraph
+    const paraLines: string[] = [];
+    while (i < lines.length && lines[i].trim() !== '' && !/^(#{1,4}|[-*]|\d+\.|```|>)/.test(lines[i])) {
+      paraLines.push(lines[i]);
+      i += 1;
+    }
+    if (paraLines.length > 0) {
+      nodes.push(
+        <p key={i} className="md-p">
+          {paraLines.map((pl, pi) => (
+            <span key={pi}>{parseInline(pl)}{pi < paraLines.length - 1 ? <br /> : null}</span>
+          ))}
+        </p>
+      );
+    } else {
+      i += 1;
+    }
+  }
+
+  return <>{nodes}</>;
+}
+
 function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: string }) {
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [conversationId, setConversationId] = useState('');
@@ -525,6 +774,12 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
     let cancelled = false;
     setLoadingHistory(true);
     setError('');
+
+    // P1-07: Sample document has no backend conversations — skip API calls
+    if (doc.id === sampleDocument.id) {
+      setLoadingHistory(false);
+      return;
+    }
 
     async function restoreConversation() {
       try {
@@ -690,8 +945,46 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
     }
   }
 
-  return (
+  async function handleRenameConversation(id: string, newTitle: string) {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+    try {
+      const response = await fetch(`/api/v1/conversations/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!response.ok) return;
+      setConversations((prev) => prev.map((c) => c.id === id ? { ...c, title: trimmed } : c));
+    } catch { /* ignore */ }
+  }
+
+  async function handleDeleteConversation(id: string) {
+    if (!window.confirm('Delete this conversation? This cannot be undone.')) return;
+    try {
+      const response = await fetch(`/api/v1/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!response.ok) return;
+      const remaining = conversations.filter((c) => c.id !== id);
+      setConversations(remaining);
+      if (id === conversationIdRef.current) {
+        if (remaining.length > 0) {
+          await selectConversation(remaining[0].id);
+        } else {
+          await startNewConversation();
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+    return (
     <section className="chat-panel" aria-label="Chat about this document">
+      {doc.id === sampleDocument.id ? (
+        <div className="chat-sample-notice">
+          <p><strong>This is a sample document.</strong></p>
+          <p>Upload a PDF or DOCX file from the sidebar to start chatting with your own documents. Your conversations are saved and persist across sessions.</p>
+        </div>
+      ) : (
+        <>
       <div className="chat-context-note">
         <div className="chat-context-note__conversation">
           <strong>Conversation</strong>
@@ -705,9 +998,41 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
               <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
             ))}
           </select>
-          <button type="button" className="chat-new-button" onClick={() => void startNewConversation()} disabled={loadingHistory}>
+          <button
+            type="button"
+            className="chat-new-button"
+            onClick={() => void startNewConversation()}
+            disabled={loadingHistory}
+            title="Start a new conversation"
+          >
             New
           </button>
+          {conversationId && (
+            <button
+              type="button"
+              className="chat-new-button"
+              disabled={loadingHistory || sending}
+              title="Rename this conversation"
+              onClick={() => {
+                const current = conversations.find((c) => c.id === conversationId);
+                const newTitle = window.prompt('Rename conversation:', current?.title ?? '');
+                if (newTitle) void handleRenameConversation(conversationId, newTitle);
+              }}
+            >
+              Rename
+            </button>
+          )}
+          {conversationId && conversations.length > 0 && (
+            <button
+              type="button"
+              className="chat-new-button chat-new-button--danger"
+              disabled={loadingHistory || sending}
+              title="Delete this conversation"
+              onClick={() => void handleDeleteConversation(conversationId)}
+            >
+              Delete
+            </button>
+          )}
         </div>
         Ask anything about <strong>{doc.name}</strong>. No text selection needed.
         <span>Context uses the current section and nearby document text.</span>
@@ -720,7 +1045,9 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
         {messages.map((message) => (
           <article key={message.id} className={`chat-message chat-message--${message.role}`}>
             <span className="chat-message__author">{message.role === 'user' ? 'You' : 'Clarity'}</span>
-            <p>{message.content}</p>
+            <div className="chat-message__body">
+              {message.role === 'assistant' ? renderMarkdown(message.content) : <p>{message.content}</p>}
+            </div>
             {message.status !== 'complete' && (
               <span className={`chat-message__status chat-message__status--${message.status}`}>
                 {message.status === 'streaming' || message.status === 'pending'
@@ -739,7 +1066,15 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
         <textarea
           value={question}
           onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Ask a question about this document…"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              if (!sending && !loadingHistory && conversationId && question.trim()) {
+                (event.currentTarget.form as HTMLFormElement).requestSubmit();
+              }
+            }
+          }}
+          placeholder="Ask a question about this document… (Enter to send, Shift+Enter for newline)"
           aria-label="Your question"
           maxLength={2000}
           rows={3}
@@ -756,6 +1091,8 @@ function ChatPanel({ doc, activeSectionId }: { doc: Document; activeSectionId: s
           )}
         </div>
       </form>
+        </>
+      )}
     </section>
   );
 }
@@ -1108,7 +1445,7 @@ function LearningPathPanel({
                     </button>
                   )}
                   {node.status !== 'locked' && (
-                    <button className="btn btn--ghost btn--sm">Mark optional</button>
+                    <button className="btn btn--ghost btn--sm" disabled title="Coming soon">Mark optional</button>
                   )}
                 </div>
               </div>
@@ -1584,7 +1921,7 @@ function SelectionTooltip({
   return (
     <div
       className="selection-tooltip"
-      style={{ top: y - 56, left: x - 165 }}
+      style={{ top: y - 56, left: Math.max(4, Math.min(x - 165, window.innerWidth - 334)) }}
       role="toolbar"
       aria-label="Selected passage actions"
     >
@@ -1996,7 +2333,10 @@ function NarrationBar({ text }: { text: string }) {
   const [error, setError] = useState('');
   const playingRef = useRef(false);
   const speedRef = useRef(speed);
-  const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [text];
+  const sentences = useMemo(
+    () => text.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [text],
+    [text],
+  );
   const speeds = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
 
   useEffect(() => {
@@ -2141,6 +2481,8 @@ function AppShell({ onBack }: { onBack: () => void }) {
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [libraryError, setLibraryError] = useState('');
   const [loadingDocumentId, setLoadingDocumentId] = useState<string | null>(null);
+  // P0-03: track restored doc ID from sessionStorage to auto-open on library load
+  const pendingRestoreDocIdRef = useRef<string | null>(sessionStorage.getItem('clarity-active-doc-id'));
   const [concepts, setConcepts] = useState<Concept[]>(sampleConcepts);
   const [research, setResearch] = useState<ResearchNote[]>(sampleResearch);
   const [savedNotes, setSavedNotes] = useState<SavedPassageNote[]>(() =>
@@ -2157,6 +2499,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
         })),
     ),
   );
+  const [modelName, setModelName] = useState('Google Gemini');
   const activeConcepts = concepts.filter((concept) => concept.documentId === activeDoc.id);
   const activeResearch = research.filter((note) => note.documentId === activeDoc.id);
   const activeSavedNotes = savedNotes.filter((note) => note.documentId === activeDoc.id);
@@ -2175,7 +2518,39 @@ function AppShell({ onBack }: { onBack: () => void }) {
   const [deferredThoughts, setDeferredThoughts] = useState<string[]>([]);
   const [showDeferred, setShowDeferred] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelName, setModelName] = useState('Google Gemini');
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Load config (model name) once on mount
+  useEffect(() => {
+    void fetchAppConfig().then(({ model }) => setModelName(model));
+  }, []);
+
+  // Load persisted concepts, research, notes when switching to a real document
+  useEffect(() => {
+    if (activeDoc.id === sampleDocument.id) return;
+    let cancelled = false;
+    void Promise.all([
+      apiListConcepts(activeDoc.id),
+      apiListResearch(activeDoc.id),
+      apiListPassageNotes(activeDoc.id),
+    ]).then(([loadedConcepts, loadedResearch, loadedNotes]) => {
+      if (cancelled) return;
+      setConcepts((prev) => {
+        const sampleOnes = prev.filter((c) => c.documentId === sampleDocument.id);
+        return [...sampleOnes, ...loadedConcepts];
+      });
+      setResearch((prev) => {
+        const sampleOnes = prev.filter((r) => r.documentId === sampleDocument.id);
+        return [...sampleOnes, ...loadedResearch];
+      });
+      setSavedNotes((prev) => {
+        const sampleOnes = prev.filter((n) => n.documentId === sampleDocument.id);
+        return [...sampleOnes, ...loadedNotes];
+      });
+    }).catch(() => { /* non-fatal — UI still works, data was just not restored */ });
+    return () => { cancelled = true; };
+  }, [activeDoc.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2189,6 +2564,24 @@ function AppShell({ onBack }: { onBack: () => void }) {
         if (!cancelled) {
           setLibraryDocuments(result.documents);
           setLibraryError('');
+          // P0-03: auto-open the last active document if it exists and is ready
+          const restoreId = pendingRestoreDocIdRef.current;
+          if (restoreId && restoreId !== sampleDocument.id) {
+            const toRestore = result.documents.find((d) => d.id === restoreId && d.status === 'ready');
+            if (toRestore) {
+              // Fire-and-forget; errors are non-fatal (UI still shows sample doc)
+              void (async () => {
+                try {
+                  const doc = await fetchProcessedDocument(toRestore.id, toRestore.created_at);
+                  setDocumentCache((prev) => ({ ...prev, [doc.id]: doc }));
+                  setActiveDoc(doc);
+                  setActiveSectionId(doc.content[0]?.id ?? '');
+                } catch {
+                  // silently swallow — user stays on sample doc
+                }
+              })();
+            }
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -2253,8 +2646,10 @@ function AppShell({ onBack }: { onBack: () => void }) {
     if (cachedDocument) {
       setActiveDoc(cachedDocument);
       setActiveSectionId(cachedDocument.content[0]?.id ?? '');
-      setPanelOpen(false);
+      // P1-05: on desktop keep panel open; only close sidebar
+      if (window.innerWidth <= 768) setPanelOpen(false);
       setSidebarOpen(false);
+      sessionStorage.setItem('clarity-active-doc-id', item.id); // P0-03
       return;
     }
 
@@ -2264,8 +2659,10 @@ function AppShell({ onBack }: { onBack: () => void }) {
       setDocumentCache((previous) => ({ ...previous, [document.id]: document }));
       setActiveDoc(document);
       setActiveSectionId(document.content[0]?.id ?? '');
-      setPanelOpen(false);
+      // P1-05: on desktop keep panel open; only close sidebar
+      if (window.innerWidth <= 768) setPanelOpen(false);
       setSidebarOpen(false);
+      sessionStorage.setItem('clarity-active-doc-id', document.id); // P0-03
     } catch (error) {
       setLibraryError(error instanceof Error ? error.message : 'Could not open the saved document.');
     } finally {
@@ -2289,45 +2686,57 @@ function AppShell({ onBack }: { onBack: () => void }) {
   }
 
   function handleSavePassage(quote: string, note: string) {
-    setSavedNotes((previous) => [{
-      id: `note-${Date.now()}`,
-      documentId: activeDoc.id,
-      quote,
-      note,
-      page: activeDoc.currentPage ?? 1,
-      createdAt: new Date(),
-    }, ...previous]);
+    const page = activeDoc.currentPage ?? 1;
+    const optimisticId = `note-${Date.now()}`;
+    const newNote: SavedPassageNote = {
+      id: optimisticId, documentId: activeDoc.id, quote, note, page, createdAt: new Date(),
+    };
+    setSavedNotes((previous) => [newNote, ...previous]);
     openPanel('notes');
+    // Persist to backend (non-sample docs only)
+    if (activeDoc.id !== sampleDocument.id) {
+      void apiSavePassageNote(activeDoc.id, quote, note, page).then((persisted) => {
+        setSavedNotes((prev) => prev.map((n) => n.id === optimisticId ? persisted : n));
+      }).catch(() => { /* optimistic note stays in memory */ });
+    }
   }
 
   function handleSaveConcept(partial: Omit<Concept, 'id' | 'createdAt' | 'documentId'>) {
-    const newConcept: Concept = {
-      ...partial,
-      id: `c-${Date.now()}`,
-      documentId: activeDoc.id,
-      createdAt: new Date(),
-    };
+    const optimisticId = `c-${Date.now()}`;
+    const newConcept: Concept = { ...partial, id: optimisticId, documentId: activeDoc.id, createdAt: new Date() };
     setConcepts((prev) => [newConcept, ...prev]);
     openPanel('concepts');
+    // Persist to backend (non-sample docs only)
+    if (activeDoc.id !== sampleDocument.id) {
+      void apiSaveConcept(activeDoc.id, partial).then((persisted) => {
+        setConcepts((prev) => prev.map((c) => c.id === optimisticId ? persisted : c));
+      }).catch(() => { /* optimistic concept stays in memory */ });
+    }
   }
 
   function handleUpdateConceptState(id: string, state: KnowledgeState) {
     setConcepts(prev => prev.map(c => c.id === id ? { ...c, knowledgeState: state } : c));
+    // Persist to backend for non-sample docs
+    if (activeDoc.id !== sampleDocument.id) {
+      void apiUpdateConceptState(id, state).catch(() => { /* ignore — UI already updated */ });
+    }
   }
 
   function handleSaveResearch(question: string, notes: string, sourceQuote: string) {
-    setResearch((prev) => [{
-      id: `r-${Date.now()}`,
-      documentId: activeDoc.id,
-      question,
-      source: 'Gemini AI synthesis',
-      sourceQuote,
-      page: activeDoc.currentPage,
-      notes,
-      createdAt: new Date(),
-    }, ...prev]);
+    const optimisticId = `r-${Date.now()}`;
+    const newNote: ResearchNote = {
+      id: optimisticId, documentId: activeDoc.id, question, source: 'Gemini AI synthesis',
+      sourceQuote, page: activeDoc.currentPage, notes, createdAt: new Date(),
+    };
+    setResearch((prev) => [newNote, ...prev]);
     openPanel('research');
     setResearchText(null);
+    // Persist to backend (non-sample docs only)
+    if (activeDoc.id !== sampleDocument.id) {
+      void apiSaveResearch(activeDoc.id, question, 'Gemini AI synthesis', sourceQuote, activeDoc.currentPage, notes).then((persisted) => {
+        setResearch((prev) => prev.map((r) => r.id === optimisticId ? persisted : r));
+      }).catch(() => { /* optimistic note stays in memory */ });
+    }
   }
 
   function handleDeferThought(thought: string) {
@@ -2512,8 +2921,11 @@ function AppShell({ onBack }: { onBack: () => void }) {
                     <span className="doc-item__progress-text">
                       {isOpening ? 'Opening…' : item.status === 'ready'
                         ? isActive ? `${activeDoc.progress}%` : `${item.total_pages ?? '—'}p`
-                        : item.status}
+                        : item.status === 'processing' ? 'Processing…' : 'Error'}
                     </span>
+                    {item.status === 'processing' && (
+                      <span className="doc-item__spinner" aria-label="Processing" />
+                    )}
                     {isActive && item.status === 'ready' && (
                       <div className="doc-item__progress">
                         <div className="doc-item__progress-bar" style={{ width: `${activeDoc.progress}%` }} />
@@ -2795,7 +3207,7 @@ function AppShell({ onBack }: { onBack: () => void }) {
             </div>
             <div className="settings-provider">
               <span className="settings-provider__label">AI provider</span>
-              <strong>Google Gemini 2.5 Flash</strong>
+              <strong>{modelName}</strong>
               <p>Your API key stays on the local server and is never included in the browser.</p>
             </div>
             <div className="form-actions">

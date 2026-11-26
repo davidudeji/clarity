@@ -3,6 +3,48 @@ import { readFile } from 'node:fs/promises';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import mammoth from 'mammoth';
 
+/**
+ * Group pdfjs text items into paragraphs using spatial heuristics.
+ * Items with a large vertical gap between them are treated as paragraph breaks.
+ * This preserves structure far better than the flat join approach.
+ */
+function groupItemsIntoParagraphs(items) {
+  if (items.length === 0) return [];
+
+  const paragraphs = [];
+  let currentLines = [];
+  let prevY = null;
+  let prevHeight = 12; // fallback font height
+
+  for (const item of items) {
+    if (!('str' in item) || typeof item.str !== 'string') continue;
+    const str = item.str;
+    const height = item.height || prevHeight;
+    const y = Array.isArray(item.transform) ? item.transform[5] : null;
+
+    if (prevY !== null && y !== null) {
+      const gap = prevY - y; // positive = moving down the page
+      const isNewParagraph = gap > prevHeight * 1.4; // gap > 1.4× line height = paragraph break
+      if (isNewParagraph && currentLines.length > 0) {
+        const paraText = currentLines.join(' ').replace(/\s+/g, ' ').trim();
+        if (paraText) paragraphs.push(paraText);
+        currentLines = [];
+      }
+    }
+
+    if (str.trim()) currentLines.push(str);
+    if (y !== null) prevY = y;
+    if (height > 0) prevHeight = height;
+  }
+
+  if (currentLines.length > 0) {
+    const paraText = currentLines.join(' ').replace(/\s+/g, ' ').trim();
+    if (paraText) paragraphs.push(paraText);
+  }
+
+  return paragraphs;
+}
+
 async function extractPdf(filePath) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const data = await readFile(filePath);
@@ -15,24 +57,25 @@ async function extractPdf(filePath) {
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const page = await pdf.getPage(pageNumber);
     const content = await page.getTextContent();
-    const text = content.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (text.length < 40) lowTextPages += 1;
+    const paragraphs = groupItemsIntoParagraphs(content.items);
+    const hasText = paragraphs.some((p) => p.length >= 10);
+    if (!hasText) lowTextPages += 1;
+
     const sectionId = `page-${pageNumber}`;
     sections.push({
       id: sectionId,
       title: `Page ${pageNumber}`,
       level: 2,
       page: pageNumber,
-      paragraphs: text ? [{ id: `page-${pageNumber}-paragraph`, text }] : [{
-        id: `page-${pageNumber}-paragraph`,
-        text: '[No extractable text found on this page.]',
-      }],
+      paragraphs: hasText
+        ? paragraphs.map((text, index) => ({ id: `page-${pageNumber}-p${index}`, text, page: pageNumber }))
+        : [{ id: `page-${pageNumber}-p0`, text: '[No extractable text found on this page.]', page: pageNumber }],
     });
-    markdownParts.push(`# Page ${pageNumber}\n\n${text || '_No extractable text found on this page._'}`);
+
+    const pageMarkdown = hasText
+      ? paragraphs.join('\n\n')
+      : '_No extractable text found on this page._';
+    markdownParts.push(`# Page ${pageNumber}\n\n${pageMarkdown}`);
   }
 
   if (pdf.numPages > 0) {
@@ -51,7 +94,7 @@ async function extractPdf(filePath) {
       ocrRequired: lowTextPages > 0,
       limitations: lowTextPages > 0
         ? ['Some pages contain little or no extractable text and may require OCR.']
-        : ['Tables, figures, columns and page layout may not preserve their visual structure.'],
+        : ['Basic paragraph structure preserved. Tables, multi-column layouts and figures may not render correctly.'],
     },
   };
 }

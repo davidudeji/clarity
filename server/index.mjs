@@ -30,6 +30,7 @@ const dataDirectory = path.join(projectDirectory, 'data');
 const documentsDirectory = path.join(dataDirectory, 'documents');
 const databasePath = path.join(dataDirectory, 'clarity.db');
 const workspaceUserId = 'anonymous-workspace-v1';
+const appVersion = '0.1.0';
 
 await mkdir(documentsDirectory, { recursive: true });
 const db = new Database(databasePath);
@@ -124,6 +125,47 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
   CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
   CREATE INDEX IF NOT EXISTS idx_message_citations_message_id ON message_citations(message_id);
+  CREATE TABLE IF NOT EXISTS concepts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    document_id TEXT,
+    title TEXT NOT NULL,
+    quote TEXT NOT NULL DEFAULT '',
+    explanation TEXT NOT NULL DEFAULT '',
+    question TEXT,
+    knowledge_state TEXT NOT NULL DEFAULT 'encountered',
+    tags TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS research_notes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    document_id TEXT,
+    question TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    source_quote TEXT NOT NULL DEFAULT '',
+    page INTEGER,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS passage_notes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    document_id TEXT,
+    quote TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    page INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_concepts_user_id ON concepts(user_id);
+  CREATE INDEX IF NOT EXISTS idx_concepts_document_id ON concepts(document_id);
+  CREATE INDEX IF NOT EXISTS idx_research_notes_user_id ON research_notes(user_id);
+  CREATE INDEX IF NOT EXISTS idx_research_notes_document_id ON research_notes(document_id);
+  CREATE INDEX IF NOT EXISTS idx_passage_notes_user_id ON passage_notes(user_id);
+  CREATE INDEX IF NOT EXISTS idx_passage_notes_document_id ON passage_notes(document_id);
 `);
 db.prepare(`
   INSERT OR IGNORE INTO users (id, name, created_at, updated_at)
@@ -564,6 +606,149 @@ async function streamWithGemini(systemPrompt, userPrompt, onText, signal) {
     status: 429,
   };
 }
+
+// ============================================================
+// CONFIG
+// ============================================================
+app.get('/api/v1/config', (_req, res) => {
+  res.json({ model, version: appVersion });
+});
+
+// ============================================================
+// CONCEPTS
+// ============================================================
+app.get('/api/v1/concepts', (req, res) => {
+  const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : null;
+  const rows = documentId
+    ? db.prepare(`SELECT id, document_id AS documentId, title, quote, explanation, question,
+                   knowledge_state AS knowledgeState, tags, created_at AS createdAt, updated_at AS updatedAt
+                 FROM concepts WHERE user_id = ? AND document_id = ? ORDER BY created_at DESC`).all(workspaceUserId, documentId)
+    : db.prepare(`SELECT id, document_id AS documentId, title, quote, explanation, question,
+                   knowledge_state AS knowledgeState, tags, created_at AS createdAt, updated_at AS updatedAt
+                 FROM concepts WHERE user_id = ? ORDER BY created_at DESC`).all(workspaceUserId);
+  res.json({ concepts: rows.map((r) => ({ ...r, tags: JSON.parse(r.tags || '[]') })) });
+});
+
+app.post('/api/v1/concepts', (req, res) => {
+  const { documentId, title, quote, explanation, question, knowledgeState, tags } = req.body ?? {};
+  if (!isTextWithinLimit(title, 500) || typeof quote !== 'string' || typeof explanation !== 'string') {
+    return res.status(400).json({ error: 'Provide a concept title, quote, and explanation.' });
+  }
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  db.prepare(`INSERT INTO concepts (id, user_id, document_id, title, quote, explanation, question, knowledge_state, tags, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, workspaceUserId,
+    typeof documentId === 'string' ? documentId : null,
+    title.trim(), (quote ?? '').trim(), (explanation ?? '').trim(),
+    typeof question === 'string' && question.trim() ? question.trim() : null,
+    typeof knowledgeState === 'string' ? knowledgeState : 'encountered',
+    JSON.stringify(Array.isArray(tags) ? tags : []),
+    now, now,
+  );
+  res.status(201).json({ id, documentId: documentId ?? null, title: title.trim(), quote: (quote ?? '').trim(),
+    explanation: (explanation ?? '').trim(), question: question?.trim() ?? null,
+    knowledgeState: knowledgeState ?? 'encountered', tags: Array.isArray(tags) ? tags : [], createdAt: now, updatedAt: now });
+});
+
+app.patch('/api/v1/concepts/:id', (req, res) => {
+  const row = db.prepare('SELECT id FROM concepts WHERE id = ? AND user_id = ?').get(req.params.id, workspaceUserId);
+  if (!row) return res.status(404).json({ error: 'Concept not found.' });
+  const { knowledgeState } = req.body ?? {};
+  const validStates = ['encountered', 'explained', 'recalled', 'applied'];
+  if (!validStates.includes(knowledgeState)) {
+    return res.status(400).json({ error: 'knowledgeState must be one of: encountered, explained, recalled, applied.' });
+  }
+  const now = new Date().toISOString();
+  db.prepare('UPDATE concepts SET knowledge_state = ?, updated_at = ? WHERE id = ?').run(knowledgeState, now, req.params.id);
+  res.json({ id: req.params.id, knowledgeState, updatedAt: now });
+});
+
+app.delete('/api/v1/concepts/:id', (req, res) => {
+  const row = db.prepare('SELECT id FROM concepts WHERE id = ? AND user_id = ?').get(req.params.id, workspaceUserId);
+  if (!row) return res.status(404).json({ error: 'Concept not found.' });
+  db.prepare('DELETE FROM concepts WHERE id = ?').run(req.params.id);
+  res.status(204).end();
+});
+
+// ============================================================
+// RESEARCH NOTES
+// ============================================================
+app.get('/api/v1/research', (req, res) => {
+  const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : null;
+  const rows = documentId
+    ? db.prepare(`SELECT id, document_id AS documentId, question, source, source_quote AS sourceQuote, page, notes,
+                   created_at AS createdAt, updated_at AS updatedAt
+                 FROM research_notes WHERE user_id = ? AND document_id = ? ORDER BY created_at DESC`).all(workspaceUserId, documentId)
+    : db.prepare(`SELECT id, document_id AS documentId, question, source, source_quote AS sourceQuote, page, notes,
+                   created_at AS createdAt, updated_at AS updatedAt
+                 FROM research_notes WHERE user_id = ? ORDER BY created_at DESC`).all(workspaceUserId);
+  res.json({ notes: rows });
+});
+
+app.post('/api/v1/research', (req, res) => {
+  const { documentId, question, source, sourceQuote, page, notes } = req.body ?? {};
+  if (!isTextWithinLimit(question, 2000)) return res.status(400).json({ error: 'Provide a research question.' });
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  db.prepare(`INSERT INTO research_notes (id, user_id, document_id, question, source, source_quote, page, notes, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, workspaceUserId,
+    typeof documentId === 'string' ? documentId : null,
+    question.trim(), (source ?? 'Gemini AI synthesis').trim(),
+    (sourceQuote ?? '').trim(),
+    typeof page === 'number' ? page : null,
+    (notes ?? '').trim(),
+    now, now,
+  );
+  res.status(201).json({ id, documentId: documentId ?? null, question: question.trim(),
+    source: (source ?? 'Gemini AI synthesis').trim(), sourceQuote: (sourceQuote ?? '').trim(),
+    page: typeof page === 'number' ? page : null, notes: (notes ?? '').trim(), createdAt: now, updatedAt: now });
+});
+
+app.delete('/api/v1/research/:id', (req, res) => {
+  const row = db.prepare('SELECT id FROM research_notes WHERE id = ? AND user_id = ?').get(req.params.id, workspaceUserId);
+  if (!row) return res.status(404).json({ error: 'Research note not found.' });
+  db.prepare('DELETE FROM research_notes WHERE id = ?').run(req.params.id);
+  res.status(204).end();
+});
+
+// ============================================================
+// PASSAGE NOTES
+// ============================================================
+app.get('/api/v1/notes', (req, res) => {
+  const documentId = typeof req.query.documentId === 'string' ? req.query.documentId : null;
+  const rows = documentId
+    ? db.prepare(`SELECT id, document_id AS documentId, quote, note, page, created_at AS createdAt, updated_at AS updatedAt
+                 FROM passage_notes WHERE user_id = ? AND document_id = ? ORDER BY created_at DESC`).all(workspaceUserId, documentId)
+    : db.prepare(`SELECT id, document_id AS documentId, quote, note, page, created_at AS createdAt, updated_at AS updatedAt
+                 FROM passage_notes WHERE user_id = ? ORDER BY created_at DESC`).all(workspaceUserId);
+  res.json({ notes: rows });
+});
+
+app.post('/api/v1/notes', (req, res) => {
+  const { documentId, quote, note, page } = req.body ?? {};
+  if (!isTextWithinLimit(quote, 12000)) return res.status(400).json({ error: 'Provide a passage quote.' });
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  db.prepare(`INSERT INTO passage_notes (id, user_id, document_id, quote, note, page, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id, workspaceUserId,
+    typeof documentId === 'string' ? documentId : null,
+    quote.trim(), (note ?? '').trim(),
+    typeof page === 'number' ? page : null,
+    now, now,
+  );
+  res.status(201).json({ id, documentId: documentId ?? null, quote: quote.trim(),
+    note: (note ?? '').trim(), page: typeof page === 'number' ? page : null, createdAt: now, updatedAt: now });
+});
+
+app.delete('/api/v1/notes/:id', (req, res) => {
+  const row = db.prepare('SELECT id FROM passage_notes WHERE id = ? AND user_id = ?').get(req.params.id, workspaceUserId);
+  if (!row) return res.status(404).json({ error: 'Passage note not found.' });
+  db.prepare('DELETE FROM passage_notes WHERE id = ?').run(req.params.id);
+  res.status(204).end();
+});
 
 app.post('/api/ai/explain', async (req, res) => {
   const { quote, userQuestion = '' } = req.body ?? {};
