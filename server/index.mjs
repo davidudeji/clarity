@@ -18,7 +18,16 @@ import {
 const app = express();
 const port = Number(process.env.API_PORT || 3001);
 const configuredModel = process.env.GENERATION_MODEL?.trim();
-const model = configuredModel?.replace(/^models\//, '') || 'gemini-2.5-flash';
+// Accept only real Gemini model name strings (e.g. gemini-2.5-flash, learnlm-2.0-flash-experimental).
+// Guard against an env-var injection that sets GENERATION_MODEL to something that
+// is not a model name (e.g. an API key) — fall back to the stable default instead.
+const isValidModelName = (name) =>
+  typeof name === 'string' && /^(gemini|learnlm|text-embedding|aqa)[-a-zA-Z0-9.]+$/.test(name);
+const rawModel = configuredModel?.replace(/^models\//, '');
+const model = isValidModelName(rawModel) ? rawModel : 'gemini-2.5-flash';
+if (configuredModel && !isValidModelName(rawModel)) {
+  console.warn(`[config] GENERATION_MODEL value does not look like a valid Gemini model name — using default "gemini-2.5-flash".`);
+}
 const geminiKeyNames = ['GEMINI_API_KEY', 'GEMINI_API_KEY_2', 'GEMINI_API_KEY_3', 'GEMINI_API_KEY_4'];
 const geminiKeyCooldownMs = 60_000;
 const geminiKeyCooldowns = new Map();
@@ -194,12 +203,20 @@ function isTextWithinLimit(value, maxLength) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
 }
 
+function isValidGeminiKey(value) {
+  if (typeof value !== 'string' || value.length < 20) return false;
+  // Accept any non-empty string of sufficient length.
+  // Google AI Studio has issued keys in multiple formats (AIza…, AQ.…, etc.);
+  // do not reject based on prefix — let the Gemini API itself validate them.
+  return true;
+}
+
 function getConfiguredGeminiKeys() {
   const seenKeys = new Set();
   return geminiKeyNames
     .map((name) => ({ name, value: process.env[name]?.trim() }))
     .filter((key) => {
-      if (!key.value || seenKeys.has(key.value)) return false;
+      if (!key.value || !isValidGeminiKey(key.value) || seenKeys.has(key.value)) return false;
       seenKeys.add(key.value);
       return true;
     });
