@@ -1258,7 +1258,7 @@ app.delete('/api/v1/documents/:id', async (req, res) => {
 const distDirectory = path.join(projectDirectory, 'dist');
 if (existsSync(distDirectory)) {
   app.use(express.static(distDirectory));
-  app.get('*', (_req, res, next) => {
+  app.get('/{*path}', (_req, res, next) => {
     if (_req.path.startsWith('/api')) return next();
     res.sendFile(path.join(distDirectory, 'index.html'));
   });
