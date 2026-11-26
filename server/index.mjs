@@ -948,7 +948,7 @@ app.post('/api/v1/conversations/:id/stream', async (req, res) => {
       WHERE conversation_id = ? AND role = 'user'
     `).get(conversation.id).count === 1;
     const title = firstUserMessage && conversation.title === 'New conversation'
-      ? question.trim().replace(/\s+/g, ' ').slice(0, 60)
+      ? question.trim().replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').slice(0, 60)
       : conversation.title;
     db.prepare(`
       UPDATE conversations

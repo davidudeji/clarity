@@ -200,16 +200,53 @@ try {
     chunkOverlap: 150,
   });
   const textChunks = await splitter.splitText(extracted.markdown);
-  const chunks = textChunks.map((text, index) => ({
-    id: `${workerData.documentId}-chunk-${index + 1}`,
-    documentId: workerData.documentId,
-    chunkIndex: index,
-    text,
-    pageStart: extracted.type === 'pdf' ? 1 : null,
-    pageEnd: extracted.type === 'pdf' ? extracted.totalPages : null,
-    heading: null,
-    section: null,
-  }));
+
+  /**
+   * For PDF chunks, derive page range from the nearest "# Page N" heading that
+   * appears at or before the chunk in the markdown. This is best-effort: if the
+   * chunk spans multiple pages (due to overlap / long paragraphs) we capture the
+   * starting page; the ending page is the next found page boundary or the same.
+   */
+  function derivePageRange(chunkText, fullMarkdown, totalPages) {
+    if (extracted.type !== 'pdf') return { pageStart: null, pageEnd: null };
+    // Find all page-heading positions in the full markdown
+    const pageHeadings = [];
+    const headingRe = /^# Page (\d+)/gm;
+    let match;
+    while ((match = headingRe.exec(fullMarkdown)) !== null) {
+      pageHeadings.push({ page: parseInt(match[1], 10), index: match.index });
+    }
+    if (pageHeadings.length === 0) return { pageStart: 1, pageEnd: totalPages || 1 };
+    // Find the chunk in the full markdown (first occurrence)
+    const chunkPos = fullMarkdown.indexOf(chunkText.slice(0, 80));
+    if (chunkPos === -1) return { pageStart: 1, pageEnd: totalPages || 1 };
+    const chunkEnd = chunkPos + chunkText.length;
+    // Page where the chunk starts: last heading whose position <= chunkPos
+    let startPage = pageHeadings[0].page;
+    for (const h of pageHeadings) {
+      if (h.index <= chunkPos) startPage = h.page;
+    }
+    // Page where the chunk ends: last heading whose position <= chunkEnd
+    let endPage = startPage;
+    for (const h of pageHeadings) {
+      if (h.index <= chunkEnd) endPage = h.page;
+    }
+    return { pageStart: startPage, pageEnd: endPage };
+  }
+
+  const chunks = textChunks.map((text, index) => {
+    const { pageStart, pageEnd } = derivePageRange(text, extracted.markdown, extracted.totalPages);
+    return {
+      id: `${workerData.documentId}-chunk-${index + 1}`,
+      documentId: workerData.documentId,
+      chunkIndex: index,
+      text,
+      pageStart,
+      pageEnd,
+      heading: null,
+      section: null,
+    };
+  });
   parentPort.postMessage({ ok: true, extracted, chunks });
 } catch (error) {
   parentPort.postMessage({

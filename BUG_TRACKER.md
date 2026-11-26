@@ -16,4 +16,8 @@
 | P2-07 | Document list shows raw `processing` status text | P2 | Upload doc → sidebar shows "processing" unformatted | Raw status string shown | Show user-friendly status labels with icons | ✅ Fixed |
 | P3-04 | Dead CSS for landing page features grid | P3 | N/A — visual only | Old landing page CSS kept | Marked for cleanup; not removed (preserving in case needed) | 📋 Noted |
 | P3-06 | Unused exported functions in gemini.ts | P3 | N/A | Dead code from earlier implementation | Retained to avoid breaking changes | 📋 Noted |
+| BUG-01 | Duplicate `modelName` useState in AppShell causes TS compile error | P0 | Build fails | `modelName` declared twice at L2502 and L2521 | Removed duplicate declaration at L2502 | ✅ Fixed |
+| BUG-02 | Mobile bottom nav missing Chat tab — chat inaccessible on mobile (P2-08) | P2 | Mobile viewport: no way to open chat panel | Chat not in mobile-bottom-nav | Added Chat tab to mobile-bottom-nav between Library and Highlights | ✅ Fixed |
+| BUG-03 | PDF chunks all report pageStart:1/pageEnd:totalPages regardless of content (P2-09) | P2 | Inspect chunks in DB — all show page 1 to N | Static assignment in worker | Implemented `derivePageRange()` in document.worker.mjs that parses `# Page N` headings to attribute each chunk to its correct page range | ✅ Fixed |
+| BUG-04 | Conversation title contains raw newlines/tabs when user submits multi-line question (P2-06) | P2 | Submit multi-line question → conversation title contains line breaks | `.replace(/\s+/g, ' ')` doesn't strip `\r\n\t` before `.trim()` | Added explicit `[\r\n\t]+` replacement before space normalization | ✅ Fixed |
 

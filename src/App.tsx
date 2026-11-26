@@ -2499,7 +2499,6 @@ function AppShell({ onBack }: { onBack: () => void }) {
         })),
     ),
   );
-  const [modelName, setModelName] = useState('Google Gemini');
   const activeConcepts = concepts.filter((concept) => concept.documentId === activeDoc.id);
   const activeResearch = research.filter((note) => note.documentId === activeDoc.id);
   const activeSavedNotes = savedNotes.filter((note) => note.documentId === activeDoc.id);
@@ -3140,9 +3139,13 @@ function AppShell({ onBack }: { onBack: () => void }) {
       </div>
 
       <nav className="mobile-bottom-nav" aria-label="Mobile navigation">
-        <button className={`mobile-bottom-nav__item ${panelTab !== 'notes' && panelTab !== 'research' ? 'active' : ''}`} onClick={() => { setSidebarOpen(true); setPanelOpen(false); }}>
+        <button className={`mobile-bottom-nav__item ${!sidebarOpen && panelTab !== 'notes' && panelTab !== 'research' && panelTab !== 'chat' ? 'active' : ''}`} onClick={() => { setSidebarOpen(true); setPanelOpen(false); }}>
           <Icon.BookOpen />
           <span>Library</span>
+        </button>
+        <button className={`mobile-bottom-nav__item ${panelTab === 'chat' && panelOpen ? 'active' : ''}`} onClick={() => { setPanelTab('chat'); setPanelOpen(true); setSidebarOpen(false); }}>
+          <Icon.Message />
+          <span>Chat</span>
         </button>
         <button className={`mobile-bottom-nav__item ${panelTab === 'notes' ? 'active' : ''}`} onClick={() => { setPanelTab('notes'); setPanelOpen(true); setSidebarOpen(false); }}>
           <Icon.Check />
