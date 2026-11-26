@@ -16,7 +16,7 @@ import {
 } from './prompt.mjs';
 
 const app = express();
-const port = Number(process.env.API_PORT || 3001);
+const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 const configuredModel = process.env.GENERATION_MODEL?.trim();
 // Accept only real Gemini model name strings (e.g. gemini-2.5-flash, learnlm-2.0-flash-experimental).
 // Guard against an env-var injection that sets GENERATION_MODEL to something that
@@ -1254,6 +1254,16 @@ app.delete('/api/v1/documents/:id', async (req, res) => {
   res.status(204).end();
 });
 
+// Serve built React frontend (production / Railway)
+const distDirectory = path.join(projectDirectory, 'dist');
+if (existsSync(distDirectory)) {
+  app.use(express.static(distDirectory));
+  app.get('*', (_req, res, next) => {
+    if (_req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(distDirectory, 'index.html'));
+  });
+}
+
 app.use((error, _req, res, next) => {
   if (res.headersSent) return next(error);
   if (error instanceof multer.MulterError) {
@@ -1270,6 +1280,6 @@ app.use((error, _req, res, next) => {
   return res.status(500).json({ error: 'The server could not complete this request.' });
 });
 
-app.listen(port, '127.0.0.1', () => {
-  console.log(`Clarity Gemini API listening on http://127.0.0.1:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Clarity Gemini API listening on http://0.0.0.0:${port}`);
 });

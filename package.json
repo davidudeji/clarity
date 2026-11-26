@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n api,web \"npm:dev:api\" \"npm:dev:web\"",
+    "start": "node server/index.mjs",
     "dev:api": "node server/index.mjs",
     "dev:web": "vite",
     "build": "tsc && vite build",
